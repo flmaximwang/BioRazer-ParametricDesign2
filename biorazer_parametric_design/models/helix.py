@@ -3,12 +3,11 @@ from typing import Iterable
 from dataclasses import dataclass, field
 from .basic import *
 import biorazer.structure.io as br_struct_io
-from biorazer_ex.apps.pulchra.execution import PulchraFixBB
 from ..params.helix_cp.generate import generate_helix_ca_by_crick
 from ..params.helix_cp.fit import fit_helix_by_crick
 from ..params.cccp.generate import generate_cc_ca_by_cccp
 from ..params.cccp.fit import fit_cc_by_cccp
-from ..params.util import ca_xyz_to_atom_array
+from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
 
 
 @dataclass
@@ -148,7 +147,7 @@ class CrickHelixIO(CrickHelixProperty):
             structure = ca_xyz_to_atom_array(xyz)
         elif backbone_type == "Gly":
             structure = ca_xyz_to_atom_array(xyz)
-            structure = PulchraFixBB(app_dir=None, app_bin="pulchra").run(structure)
+            structure = pulchra_fix_backbone(structure)
         else:
             raise ValueError(f"Unsupported backbone_type: {backbone_type}")
         helix.structure = structure
@@ -266,9 +265,7 @@ class CrickHelixOperation(CrickHelixProperty):
             c_terminal_res_id = max(self.structure.res_id)
             new_structure.res_id += c_terminal_res_id
             self.structure = bt_struct.concatenate([self.structure, new_structure])
-        self.structure = PulchraFixBB(app_dir=None, app_bin="pulchra").run(
-            self.structure
-        )
+        self.structure = pulchra_fix_backbone(self.structure)
 
 
 @dataclass
@@ -449,7 +446,7 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
             structure = ca_xyz_to_atom_array(xyz)
         elif backbone_type == "Gly":
             structure = ca_xyz_to_atom_array(xyz)
-            structure = PulchraFixBB(app_dir=None, app_bin="pulchra").run(structure)
+            structure = pulchra_fix_backbone(structure)
         else:
             raise ValueError(f"Unsupported backbone_type: {backbone_type}")
         res_obj.structure = structure

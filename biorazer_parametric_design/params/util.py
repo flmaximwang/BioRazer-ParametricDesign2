@@ -63,6 +63,55 @@ def _construct_param_dict(params: np.ndarray, parse_dict: dict):
     return param_dict
 
 
+def pulchra_fix_backbone(structure, app_bin="pulchra"):
+    """
+    Rebuild full backbone atoms (N, CA, C, O) from a CA-only structure by
+    calling the external ``pulchra`` binary directly (no wrapper package).
+
+    Each chain is processed separately because pulchra output loses chain IDs;
+    the original chain IDs are restored afterwards. Pulchra ATOM records also
+    lack occupancy/B-factor columns, so they are padded before biotite parsing.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from biorazer.structure.io.protein import AtomArray_Pdb, Pdb_AtomArray
+
+    chain_ids = sorted(set(structure.chain_id))
+    rebuilt_chains = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        for chain_id in chain_ids:
+            chain_arr = structure[structure.chain_id == chain_id]
+            input_file = tmp_path / "input.pdb"
+            rebuilt_file = tmp_path / "input.rebuilt.pdb"
+            fixed_file = tmp_path / "fixed.pdb"
+            AtomArray_Pdb(output_io=input_file).write(chain_arr)
+            proc = subprocess.run(
+                [app_bin, input_file.name],
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"pulchra failed (exit {proc.returncode}) on chain {chain_id!r}:\n"
+                    f"{proc.stderr.strip() or proc.stdout.strip()}"
+                )
+            # pulchra 的 ATOM 行没有 occupancy/B-factor 列, 补上以便 biotite 按列解析
+            with open(rebuilt_file) as f_in, open(fixed_file, "w") as f_out:
+                for line in f_in:
+                    if line.startswith("ATOM"):
+                        f_out.write(line.rstrip("\n") + "  1.00  0.00\n")
+                    else:
+                        f_out.write(line)
+            rebuilt = Pdb_AtomArray(input_io=fixed_file).read()
+            rebuilt.chain_id = np.array([chain_id] * len(rebuilt))
+            rebuilt_chains.append(rebuilt)
+    return bio_struct.concatenate(rebuilt_chains)
+
+
 def ca_xyz_to_atom_array(xyz, chain_id_i="A", res_name="GLY"):
 
     if len(xyz.shape) == 3:
