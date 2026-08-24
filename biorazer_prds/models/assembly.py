@@ -18,6 +18,7 @@
 
 from dataclasses import dataclass, field, fields, MISSING
 from copy import deepcopy
+from typing import Self
 
 import numpy as np
 import biotite.structure as bt_struct
@@ -439,7 +440,7 @@ class Assembly:
     @classmethod
     def from_atomarray(cls, *, structure: bt_struct.AtomArray,
                        ref_structure: bt_struct.AtomArray = None,
-                       mask: "str | dict" = "all"):
+                       mask: "str | dict" = "all") -> Self:
         """从 AtomArray 构建 Assembly。
 
         Parameters

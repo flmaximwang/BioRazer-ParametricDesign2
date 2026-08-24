@@ -1,5 +1,5 @@
 import re
-from typing import Iterable
+from typing import Iterable, Self
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -310,7 +310,7 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
 
     @classmethod
     def from_atomarray(cls, *, structure, ref_structure=None,
-                       mask: "str | dict" = "all"):
+                       mask: "str | dict" = "all") -> Self:
         """构建多螺旋束: 每个 mask key 是一条螺旋, 子节点为 CrickHelix 叶。
 
         ``mask="all"`` 退化为叶 (仅包裹结构)。否则要求 mask 为 ``helix_<i>``
