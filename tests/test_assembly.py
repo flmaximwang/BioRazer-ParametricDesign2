@@ -405,6 +405,74 @@ class TestSetType:
         assert tree.mask["bundle"].sum() == 14
 
 
+class TestRotateRotvec:
+    """rotate_rotvec: 绕过给定点的轴旋转, 检验轴上点不动、整圈还原、
+    与 scipy 绕点旋转一致、角度单位 (rad/deg) 一致、零向量报错。"""
+
+    @staticmethod
+    def _make():
+        return Assembly(structure=_atoms(7, 0, "A"))
+
+    def test_point_on_axis_is_invariant(self):
+        a = self._make()
+        before = _coords(a.structure).copy()
+        # 轴过 (3,0,0) 且方向 [1,0,0]; 原子索引 3 坐标恰为 (3,0,0) 落在轴上
+        a.rotate_rotvec([3, 0, 0], [1, 0, 0], np.pi / 3)
+        np.testing.assert_allclose(
+            np.asarray(a.structure.coord[3]), [3, 0, 0], atol=1e-12
+        )
+        # 每个原子到轴上点 (3,0,0) 的距离在旋转前后不变
+        for i in range(len(before)):
+            d_before = np.linalg.norm(before[i] - [3, 0, 0])
+            d_after = np.linalg.norm(a.structure.coord[i] - [3, 0, 0])
+            np.testing.assert_allclose(d_after, d_before, atol=1e-12)
+
+    def test_full_turn_restores_original(self):
+        a = self._make()
+        before = _coords(a.structure).copy()
+        a.rotate_rotvec([1, 2, 3], [0, 0, 1], 2 * np.pi)
+        np.testing.assert_allclose(_coords(a.structure), before, atol=1e-9)
+
+    def test_matches_scipy_rotvec_about_point(self):
+        from scipy.spatial.transform import Rotation as R
+        a = self._make()
+        p = np.array([2.0, -1.0, 4.0])
+        axis = np.array([1.0, 2.0, -1.0])
+        axis = axis / np.linalg.norm(axis)
+        ang = 0.7
+        expected = R.from_rotvec(axis * ang).apply(
+            np.asarray(a.structure.coord) - p
+        ) + p
+        a.rotate_rotvec(p, axis, ang)
+        np.testing.assert_allclose(_coords(a.structure), expected, atol=1e-12)
+
+    def test_composition_equals_sum_of_angles(self):
+        a = self._make()
+        b = a.copy()
+        p, axis = [[0, 0, 5], [0, 1, 0]]
+        a.rotate_rotvec(p, axis, 1.0)
+        b.rotate_rotvec(p, axis, 0.5)
+        b.rotate_rotvec(p, axis, 0.5)
+        np.testing.assert_allclose(
+            _coords(a.structure), _coords(b.structure), atol=1e-12
+        )
+
+    def test_degrees_flag_consistent(self):
+        from scipy.spatial.transform import Rotation as R
+        a = self._make()
+        b = self._make()
+        a.rotate_rotvec([0, 0, 0], [0, 0, 1], 90, degrees=True)
+        b.rotate_rotvec([0, 0, 0], [0, 0, 1], np.pi / 2)
+        np.testing.assert_allclose(
+            _coords(a.structure), _coords(b.structure), atol=1e-12
+        )
+
+    def test_zero_axis_raises(self):
+        a = self._make()
+        with pytest.raises(ValueError, match="non-zero"):
+            a.rotate_rotvec([0, 0, 0], [0, 0, 0], 1.0)
+
+
 class TestCCCPCenterConvergence:
     """CCCPHelixBundle.center() 在含子节点的束上应能收敛。
 

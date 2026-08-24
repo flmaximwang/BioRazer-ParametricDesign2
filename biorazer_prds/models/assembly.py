@@ -287,6 +287,40 @@ class Assembly:
         self.rotate(rotation, centroid_to_origin=centroid_to_origin,
                     XYZ_to_xyz=XYZ_to_xyz)
 
+    def rotate_rotvec(self, axis_point, axis_direction, angle, degrees=False):
+        """绕一条给定轴旋转当前结构。旋转轴过 ``axis_point``, 方向为
+        ``axis_direction``, 转角为 ``angle``。
+
+        把坐标先平移到以轴上一点为原点, 施加绕轴旋转后再平移回去:
+            coord' = R @ (coord - axis_point) + axis_point
+        其中 R 的旋转轴 = 单位化的 ``axis_direction``, 转角 = ``angle``。
+        只改坐标, 不改原子数/编号, 故现有 mask 仍有效。就地修改当前节点的
+        ``structure``。
+
+        Parameters
+        ----------
+        axis_point : array_like, shape (3,)
+            旋转轴上的一点 (如对称轴穿过的点)。
+        axis_direction : array_like, shape (3,)
+            旋转轴方向向量 (内部会单位化; 零向量报错)。
+        angle : float
+            旋转角度, 单位由 ``degrees`` 决定。
+        degrees : bool
+            False (默认): ``angle`` 单位为弧度; True: 单位为度。
+        """
+        axis = np.asarray(axis_direction, dtype=float)
+        norm = np.linalg.norm(axis)
+        if norm == 0:
+            raise ValueError("axis_direction must be a non-zero vector")
+        axis = axis / norm
+        if degrees:
+            angle = np.deg2rad(angle)
+        rotation = R.from_rotvec(axis * angle)
+        p = np.asarray(axis_point, dtype=float)
+        self.structure.coord = rotation.apply(self.structure.coord - p) + p
+        self._centroid = None
+        self._xyz = None
+
     def center(self, max_try=10, atol_rot=1e-5, atol_trans=1e-5, verbose=False):
         """迭代地把自身居中: 旋转使局部轴对齐规范轴, 平移到质心=原点。"""
         def _log(message: str):
@@ -409,6 +443,153 @@ class Assembly:
         rotation = calculate_rotation(x, y, z)
 
         return translation, rotation
+
+    # ------------------------------------------------------------------
+    # 任意 N 个 Assembly 之间的 Cn 对称轴 (static; 每个都需定义 centroid 与 xyz)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def calculate_Cn_among(assemblies, atol=1e-3):
+        """计算 ``assemblies`` 中 N 个 Assembly 之间的 Cn 对称轴, 并给出把
+        Assembly 0 绕该轴旋转到其它 Assembly 的 RMSD (用于校验对称性)。
+
+        要求其中每个 assembly 都定义 ``centroid`` (3 维点) 与 ``xyz``
+        (局部正交帧), 且它们按 Cn 对称性排布: 绕对称轴旋转 ``2π/N``
+        会把每个 assembly 依次映射到下一个。
+
+        推导 (只用通用定义):
+        - **轴上一点**: N 个 assembly 的质心到轴等距、且都落在垂直于轴的
+          一个平面内 (Cn 排布的质心环), 因此质心环圆心 = 各质心的均值
+          ``mean(centroids)`` 位于对称轴上。
+        - **轴方向**: 质心环所在最佳拟合平面的法向 (对中心化质心做 SVD, 取
+          最小奇异值方向的右奇异向量)。**C2 特例**: 仅 2 个质心, 无法由质心
+          确定平面法向 (方向退化是 C2 的*预期*情形), 强制改用相邻 assembly
+          局部帧 (``xyz``) 相对旋转的旋转轴平均 —— 这正是要求每个 assembly
+          都定义 ``xyz`` 的原因。**C3+**: 质心环应落在圆上 (非退化), 平面法向
+          可直接由 SVD 得到; 若检测到退化质心环 (共线/共点), 抛 ``ValueError``
+          而非静默兜底。
+        - **RMSD**: 固定 Assembly 0 为参考, 对每个 j = 1..N-1, 把 Assembly 0
+          绕已求得的轴旋转 ``j·2π/N``, 与 Assembly j 逐原子计算原始 RMSD
+          (原子顺序需一一对应, 如对称副本)。严格 Cn 对称时 RMSD ≈ 0。
+
+        Parameters
+        ----------
+        assemblies : sequence[Assembly]
+            N 个 cn 对称排布的 Assembly (N ≥ 2)。所有 assembly 的原子数须一致
+            (对称副本), 否则无法逐原子比较 RMSD。
+        atol : float
+            SVD 判定质心环是否退化的容差 (仅影响轴方向的兜底选择)。
+
+        Returns
+        -------
+        dict
+            - ``axis_point`` : np.ndarray — 位于 Cn 对称轴上的一个点 (质心环圆心)。
+            - ``axis_direction`` : np.ndarray — Cn 对称轴的单位方向向量。
+            - ``rmsd`` : np.ndarray, shape (N-1,) — ``rmsd[j-1]`` = 把 Assembly 0
+              绕轴旋转 ``j·2π/N`` 后与 Assembly j 的逐原子 RMSD。
+        """
+        arrs = list(assemblies)
+        n = len(arrs)
+        if n < 2:
+            raise ValueError(
+                "calculate_Cn_among requires at least 2 assemblies "
+                f"(got {n})."
+            )
+        for a in arrs:
+            centroid = a.centroid
+            if centroid is None or np.asarray(centroid).shape != (3,):
+                raise ValueError(
+                    "Each assembly must define a 3D centroid "
+                    f"(got {centroid!r})."
+                )
+            xyz = a.xyz
+            if xyz is None or np.asarray(xyz).shape != (3, 3):
+                raise ValueError(
+                    "Each assembly must define an xyz frame (3x3) "
+                    f"(got {xyz!r})."
+                )
+        n_atoms = {len(a.structure) for a in arrs}
+        if len(n_atoms) != 1:
+            raise ValueError(
+                "calculate_Cn_among requires all assemblies to have the same "
+                f"atom count to compute pairwise RMSD (got {sorted(n_atoms)})."
+            )
+
+        # 轴上一点: N 个 Cn 对称排布的质心到轴等距且落在同一垂直于轴的平面内,
+        # 故质心环圆心 = 各质心均值 位于对称轴上。
+        centroids = np.asarray([a.centroid for a in arrs], dtype=float)
+        axis_point = centroids.mean(axis=0)
+
+        # 轴方向:
+        # - C2 (n==2): 只有 2 个质心, 永远无法由质心环确定平面法向 —— 方向
+        #   退化是 C2 的**预期**情形, 强制改用 xyz 帧相对旋转轴兜底 (不报错)。
+        # - C3+ : 3+ 个对称排布的质心应落在圆上 (非退化), 平面法向可直接由
+        #   SVD 得到; 若质心环退化为共线/共点, 说明输入并不构成有效的非退化
+        #   Cn 排布 → 报错 (而非静默兜底)。
+        if n == 2:
+            rot_axes = []
+            ref_axis = None
+            for i in range(2):
+                j = (i + 1) % 2
+                ra = np.asarray(arrs[i].xyz, dtype=float)  # x, y, z 行向量
+                rb = np.asarray(arrs[j].xyz, dtype=float)
+                # 帧 i → 帧 j 的相对旋转 (ra 行=帧基底, 故 (ra.T)^-1 = ra)
+                r_rel = R.from_matrix(rb.T @ ra)
+                rotvec = r_rel.as_rotvec()
+                axis = rotvec / np.linalg.norm(rotvec)
+                if ref_axis is None:
+                    ref_axis = axis
+                elif np.dot(axis, ref_axis) < 0:
+                    axis = -axis
+                rot_axes.append(axis)
+            axis_direction = np.mean(rot_axes, axis=0)
+        else:
+            centered = centroids - axis_point
+            _, s, vh = np.linalg.svd(centered)
+            if min(s.shape) < 3 or s[1] <= atol * max(s[0], 1.0):
+                raise ValueError(
+                    f"calculate_Cn_among: 非 C2 的 C{n} 对称要求质心环落在圆上 "
+                    "(非退化), 但检测到可能共线/共点的退化质心环 "
+                    f"(singular values={np.round(s, 6)}). "
+                    "请检查 assemblies 是否真的构成 C{n} 对称排布。"
+                )
+            axis_direction = vh[-1]  # 最小奇异值方向 = 平面法向
+        axis_direction = axis_direction / np.linalg.norm(axis_direction)
+
+        # RMSD: 参考 = Assembly 0; 对 j = 1..N-1, 把 Assembly 0 绕轴旋转
+        # j·2π/N 后与 Assembly j 逐原子比较 (原始 RMSD, 不再最优叠合)。
+        ref_coord = np.asarray(arrs[0].structure.coord, dtype=float)
+
+        # 固定轴方向符号 (SVD 平面法向符号任意): 使绕轴 ``+2π/N`` 能把
+        # Assembly 0 转到**下一个** Assembly (1) 而非上一个 (N-1)。否则 RMSD
+        # 会把相邻对称伙伴旋转到反方向, 即使严格对称也会得到很大的值。
+        if n > 2:
+            cand = axis_direction
+            plus = R.from_rotvec(2 * np.pi / n * cand).apply(
+                ref_coord - axis_point
+            ) + axis_point
+            d_next = np.mean(np.sum((plus - arrs[1].structure.coord) ** 2, axis=1))
+            d_prev = np.mean(np.sum(
+                (plus - arrs[n - 1].structure.coord) ** 2, axis=1
+            ))
+            if d_prev < d_next:
+                axis_direction = -axis_direction
+
+        rmsd = np.zeros(n - 1)
+        for j in range(1, n):
+            moved = R.from_rotvec(j * 2 * np.pi / n * axis_direction).apply(
+                ref_coord - axis_point
+            ) + axis_point
+            target = np.asarray(arrs[j].structure.coord, dtype=float)
+            rmsd[j - 1] = np.sqrt(
+                np.mean(np.sum((moved - target) ** 2, axis=1))
+            )
+
+        return {
+            "axis_point": axis_point,
+            "axis_direction": axis_direction,
+            "rmsd": rmsd,
+        }
 
     # ------------------------------------------------------------------
     # 辅助
