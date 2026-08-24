@@ -1,1 +1,2 @@
-from .basic import AssemblyPart, Assembly
+from .assembly import Assembly
+from .assembly_part import AssemblyPart
