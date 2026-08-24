@@ -158,21 +158,16 @@ class CrickHelix(AssemblyParaRef):
         self.extra_param["helix_type"] = self.calculate_helix_type(self.param["omega"])
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
-    def modify(self, method, *args, **kwargs):
-        """Methods
-        -------
-        elongate_with_gly : elongate the helix by adding glycine residues
-            - length : int, number of residues to add
-            - terminus : str, "N" for N-terminus, "C" for C-terminus, "B" for both
-        """
-        if method == "elongate_with_gly":
-            length = kwargs.get("length", 1)
-            terminus = kwargs.get("terminus", "C")
-            self._modify_elongate_with_gly(length, terminus)
-        else:
-            raise ValueError(f"Unsupported modification method: {method}")
+    def elongate_with_gly(self, length: int, terminus: str = "C"):
+        """通过添加甘氨酸残基伸长螺旋。
 
-    def _modify_elongate_with_gly(self, length: int, terminus: str = "C"):
+        Parameters
+        ----------
+        length : int
+            要添加的残基数 (正整数)。
+        terminus : str
+            "N" 为 N 端, "C" 为 C 端, "B" 为两端。
+        """
         assert (
             isinstance(length, int) and length > 0
         ), "Length must be a positive integer."

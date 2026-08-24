@@ -2,7 +2,7 @@
 
 ref_structure 是 *虚拟* 的: 由拟合参数生成的理想轨迹, 作为放置/注册的参考几何。
 携带参数拟合机制 (``param`` / ``initial_param`` / ``extra_param`` /
-``params_not_to_fit`` / ``rmsd``) 与 ``fit`` / ``modify`` / ``from_params``。
+``params_not_to_fit`` / ``rmsd``) 与 ``fit`` / ``from_params``。
 拟合得到的虚拟结构直接存入 ``ref_structure``。
 """
 
@@ -52,7 +52,3 @@ class AssemblyParaRef(Assembly):
         ``initial_param`` 提供初始猜测; ``params_not_to_fit`` 指定固定参数;
         ``verbose=True`` 打印拟合过程。
         """
-
-    @abstractmethod
-    def modify(self, method, *args, **kwargs):
-        """用给定方法与参数修改结构; 依赖对象内存储的参数。"""
