@@ -345,47 +345,84 @@ class TestSplit:
             leaf.split({"y": np.array([True] * 4, dtype=bool)})
 
 
-class TestReplacePart:
-    """replace_part(): 把节点重构成特定子类 (如 CCCPHelixBundle) 后替换。"""
+class TestSetType:
+    """set_type(): 修改自身类型, 保留 structure/parts/mask (mask 属结构, 不由类型指定)。"""
 
-    def test_replace_leaf_with_bundle(self):
+    def test_set_type_changes_class_preserves_structure(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(5, 0, "A"))
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        before = _coords(leaf.structure).copy()
+        leaf.set_type(CrickHelix)
+        assert isinstance(leaf, CrickHelix)
+        assert len(leaf.structure) == 5
+        np.testing.assert_array_equal(_coords(leaf.structure), before)
+        # _parent 保留
+        assert leaf._parent is None
+
+    def test_set_type_internal_node_to_bundle(self):
         from biorazer_prds.models.assembly_helix import CCCPHelixBundle
 
-        # 构造一个 2 螺旋束 (14 原子, 2 个 CrickHelix 子节点)
-        bun = CCCPHelixBundle.from_param(
-            helix_num=2, residue_num=7, backbone_type="CA"
+        # 先定义结构: 内部节点 'bundle' 有两个螺旋子节点
+        S = _atoms(14, 0, "A")
+        m_helix1 = np.zeros(14, bool); m_helix1[:7] = True
+        m_helix2 = np.zeros(14, bool); m_helix2[7:] = True
+        tree = Assembly.from_atomarray(
+            structure=S, mask={"bundle": {"helix_1": m_helix1, "helix_2": m_helix2}}
         )
-        n = len(bun.structure)
-        m1 = np.zeros(n, bool); m1[:7] = True
-        m2 = np.zeros(n, bool); m2[7:] = True
-        bundle = CCCPHelixBundle.from_atomarray(
-            structure=bun.structure, mask={"helix_1": m1, "helix_2": m2}
+        node = tree["bundle"]
+        assert not isinstance(node, CCCPHelixBundle)
+
+        # 再指定类型
+        node.set_type(CCCPHelixBundle)
+        assert isinstance(node, CCCPHelixBundle)
+        # 子节点 (螺旋) 与 mask 保留
+        assert set(node.parts) == {"helix_1", "helix_2"}
+        assert len(node.parts["helix_1"].structure) == 7
+        assert node.helix_num == 2
+        # 父节点对 'bundle' 的引用仍有效, mask 一致
+        assert tree["bundle"] is node
+        assert tree.mask["bundle"].sum() == 14
+
+
+class TestReplaceWith:
+    """replace_with(): 用新块替换本节点, 重建本节点及以上所有祖先的 structure/mask。"""
+
+    def test_replace_leaf_rebuilds_ancestors(self):
+        # 三层树: root -> mid -> leaf ; 替换 leaf 为原子数不同的块
+        S = _atoms(12, 0, "A")
+        m_leaf = np.zeros(12, bool); m_leaf[:3] = True
+        m_mid = np.zeros(12, bool); m_mid[:3] = True
+        m_other = np.zeros(12, bool); m_other[3:] = True
+        root = Assembly.from_atomarray(
+            structure=S, mask={"mid": {"leaf": m_leaf}, "other": m_other}
         )
+        leaf = root["mid"]["leaf"]
+        assert len(leaf.structure) == 3
 
-        # 父树里一个 14 原子的叶节点 'node'
-        parent = Assembly.from_atomarray(structure=_atoms(20, 0, "A"))
-        m_left = np.zeros(20, bool); m_left[:14] = True
-        m_right = np.zeros(20, bool); m_right[14:] = True
-        parent.split({"node": m_left, "other": m_right})
-        assert parent.parts["node"].parts == {}
+        # 替换成 5 原子的块 (原子数不同)
+        new_chunk = Assembly.from_atomarray(structure=_atoms(5, 100, "A"))
+        new_leaf = leaf.replace_with(new_chunk)
 
-        # 重构成 CCCPHelixBundle 并替换
-        parent.replace_part("node", bundle)
-        assert parent.parts["node"] is bundle
-        assert isinstance(parent.parts["node"], CCCPHelixBundle)
-        # 父 mask 保持有效 (选中同样 14 原子区间)
-        assert parent.mask["node"].sum() == 14 and len(parent.mask["node"]) == 20
+        # 新块挂上, 旧块脱离
+        assert root["mid"]["leaf"] is new_leaf
+        assert len(new_leaf.structure) == 5
+        # 祖先 structure/mask 重建
+        assert len(root["mid"].structure) == 5           # mid = leaf(5)
+        assert root["mid"].mask["leaf"].sum() == 5
+        assert len(root.structure) == 5 + 9              # root = mid(5) + other(9)
+        assert root.mask["mid"].sum() == 5
+        assert root.mask["other"].sum() == 9
+        # mask 与各自 structure 同长
+        assert len(root.mask["mid"]) == 14
+        assert len(root["mid"].mask["leaf"]) == 5
 
-        # 束可拟合; 父结构仍一致
-        bundle.fit(verbose=False)
-        assert bundle.rmsd is not None
-        parent.merge_up()
-        assert len(parent.structure) == 20
-        assert parent.mask["node"].sum() == 14 and parent.mask["other"].sum() == 6
-
-    def test_replace_atom_count_mismatch_raises(self):
-        parent = Assembly.from_atomarray(structure=_atoms(6, 0, "A"))
-        m = np.zeros(6, bool); m[:4] = True
-        parent.split({"a": m})
-        with pytest.raises(ValueError, match="原子数不一致"):
-            parent.replace_part("a", Assembly(structure=_atoms(99, 0, "A")))
+    def test_replace_with_preserves_sibling(self):
+        S = _atoms(10, 0, "A")
+        m_a = np.zeros(10, bool); m_a[:4] = True
+        m_b = np.zeros(10, bool); m_b[4:] = True
+        root = Assembly.from_atomarray(structure=S, mask={"a": m_a, "b": m_b})
+        root["a"].replace_with(Assembly.from_atomarray(structure=_atoms(6, 200, "A")))
+        assert len(root.structure) == 6 + 6
+        assert root.mask["a"].sum() == 6
+        assert root.mask["b"].sum() == 6

@@ -16,7 +16,7 @@
   排序只允许在导出边界 (``to_pdb`` / ``to_cif``) 做。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, MISSING
 from copy import deepcopy
 
 import numpy as np
@@ -49,6 +49,7 @@ class Assembly:
 
     _centroid: np.ndarray = None
     _xyz: np.ndarray = None
+    _parent: "Assembly" = field(default=None, init=False, repr=False, compare=False)
 
     # ------------------------------------------------------------------
     # 树结构传播 (本次重构核心)
@@ -81,6 +82,13 @@ class Assembly:
             return
         for child in self.parts.values():
             child.merge_up()
+        self._recompute_from_children()
+
+    def _recompute_from_children(self):
+        """用子节点 structure 重建本节点 structure 与 mask (同 merge_up 的合成部分)。
+
+        只合成本节点一层, 不递归; 用于局部替换后沿祖先向上重建。
+        """
         self.structure = bt_struct.concatenate(
             [child.structure for child in self.parts.values()]
         )
@@ -118,6 +126,7 @@ class Assembly:
     def append_part(self, name, part):
         """追加一个子 Assembly。子节点顺序即 ``merge_up`` 的拼接顺序。"""
         self.parts[name] = part
+        part._parent = self
         return self
 
     def check_part_name(self, name):
@@ -132,22 +141,64 @@ class Assembly:
         self.check_part_name(name)
         return self.parts[name]
 
-    def replace_part(self, name, new_part):
-        """用新节点替换子节点 ``name`` (叶 → 特定子类, 如换成 CCCPHelixBundle)。
+    def set_type(self, new_type):
+        """修改自身类型为 ``new_type``, 保留 ``structure`` / ``ref_structure`` /
+        ``parts`` / ``mask``。
 
-        重建: 用 ``new_type.from_atomarray(structure=本节点.structure, mask=...)``
-        生成新节点后再替换。父节点的 ``mask[name]`` 保持有效 —— 要求新旧子节点
-        原子数一致 (结构不变, 只是类型/子树不同)。返回 self。
+        mask 属于树结构, 不由类型指定; 类型只改变节点的拟合/参考行为。
+        就地修改 (``self.__class__``), 树中对该节点的引用无需改动。不递归
+        (子节点类型需单独设置)。
+
+        典型用法: 先 ``from_atomarray`` / ``split`` 定义结构, 再对节点
+        ``set_type(CCCPHelixBundle)`` 指定其拟合类型。
         """
-        self.check_part_name(name)
-        old_n = len(self.parts[name].structure)
-        new_n = len(new_part.structure)
-        if old_n != new_n:
-            raise ValueError(
-                f"替换节点 '{name}' 原子数不一致: {old_n} != {new_n}"
-            )
-        self.parts[name] = new_part
+        if self.__class__ is new_type:
+            return self
+        keep = {f.name: getattr(self, f.name) for f in fields(self)}
+        self.__class__ = new_type
+        for f in fields(new_type):
+            if f.name in keep:
+                setattr(self, f.name, keep[f.name])
+            elif f.default is not MISSING:
+                setattr(self, f.name, f.default)
+            elif f.default_factory is not MISSING:
+                setattr(self, f.name, f.default_factory())
+            else:
+                setattr(self, f.name, None)
         return self
+
+    def replace_with(self, new_part):
+        """用 ``new_part`` 替换本节点所在的这一块, 并重建本节点及以上所有祖先节点
+        的 ``structure`` 与 ``mask``。
+
+        原子数可不同 (这是一次真正的结构替换)。本节点作为其父节点的子节点被
+        ``new_part`` 替换; 随后从父节点沿 ``_parent`` 向上逐层重建
+        (structure = 子节点拼接, mask = 连续区间)。返回新挂上的节点。
+        """
+        parent = self._parent
+        if parent is None:
+            # 根节点: 采用 new_part 的内容作为新的根。
+            self.structure = new_part.structure
+            self.ref_structure = new_part.ref_structure
+            self.parts = new_part.parts
+            self.mask = new_part.mask
+            for child in self.parts.values():
+                child._parent = self
+            return self
+        name = None
+        for k, v in parent.parts.items():
+            if v is self:
+                name = k
+                break
+        if name is None:
+            raise ValueError("本节点未挂在其父节点的 parts 中")
+        parent.parts[name] = new_part
+        new_part._parent = parent
+        node = parent
+        while node is not None:
+            node._recompute_from_children()
+            node = node._parent
+        return new_part
 
     # ------------------------------------------------------------------
     # 坐标访问
@@ -438,6 +489,7 @@ class Assembly:
                     structure=self.structure[union], ref_structure=self.ref_structure
                 )
                 self.parts[name] = child
+                child._parent = self
                 child._build_subtree(m, indices[union])
             else:
                 # 叶: m 是等长于顶层 structure 的掩码, 投影到本节点即为其子掩码。
@@ -446,3 +498,4 @@ class Assembly:
                 self.parts[name] = type(self)(
                     structure=self.structure[local], ref_structure=self.ref_structure
                 )
+                self.parts[name]._parent = self
