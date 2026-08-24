@@ -410,11 +410,3 @@ class Assembly:
                 self.parts[name] = type(self)(
                     structure=self.structure[local], ref_structure=self.ref_structure
                 )
-
-    def to_pdb(self, pdb_file):
-        """导出结构到 PDB 文件。"""
-        br_struct_io.protein.STRUCT2PDB("", pdb_file).write(self.structure)
-
-    def to_cif(self, cif_file):
-        """导出结构到 CIF 文件。"""
-        br_struct_io.protein.STRUCT2CIF("", cif_file).write(self.structure)
