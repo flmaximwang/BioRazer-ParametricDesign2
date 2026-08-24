@@ -6,7 +6,7 @@ import biotite.structure as bt_struct
 
 import biorazer.structure.io as br_struct_io
 
-from .assembly_parametric import AssemblyParaRef
+from .assembly_para_ref import AssemblyParaRef
 from ..params.helix_cp.generate import generate_helix_ca_by_crick
 from ..params.helix_cp.fit import fit_helix_by_crick
 from ..params.cccp.generate import generate_cc_ca_by_cccp
