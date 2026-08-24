@@ -84,7 +84,7 @@ class TestFitTrajectory:
             structure_list[-1].coord, xyz.reshape(-1, 3), atol=1e-9
         )
 
-    def test_bundle_fit_stores_trajectory_on_self(self):
+    def test_bundle_fit_returns_trajectory(self):
         base, _, _ = generate_cc_ca_by_cccp(
             helix_num=2, residue_num=10, centroid=[0, 0, 0]
         )
@@ -98,11 +98,13 @@ class TestFitTrajectory:
         m1 = np.zeros(20, bool); m1[:10] = True
         m2 = np.zeros(20, bool); m2[10:] = True
         bundle = CCCPHelixBundle.from_atomarray(structure=aa, mask={"h1": m1, "h2": m2})
-        bundle.fit()
-        assert len(bundle.fit_trajectory) == 1 + 3 * 10
-        for arr in bundle.fit_trajectory:
+        trajectory = bundle.fit()
+        assert len(trajectory) == 1 + 3 * 10
+        for arr in trajectory:
             assert isinstance(arr, bt_struct.AtomArray)
             assert len(arr) == 20
+        # 不记录到属性
+        assert not hasattr(bundle, "fit_trajectory")
 
 
 class TestGenerateRefStructure:

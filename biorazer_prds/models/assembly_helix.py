@@ -418,8 +418,6 @@ class CCCPHelixBundle(AssemblyParaRef):
             verbose=verbose,
             **self.initial_param,
         )
-        # 每一步 optimize 生成的 structure 轨迹 (debug 用)
-        self.fit_trajectory = structure_list
 
         self.param = param
         z = param["z"]
@@ -444,6 +442,7 @@ class CCCPHelixBundle(AssemblyParaRef):
         )
         self._centroid = self.param["centroid"]
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
+        return structure_list
 
     def trim_or_extend(
         self, helix_index: int, n: int, terminus: str, resn: str = "GLY"
