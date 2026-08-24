@@ -8,7 +8,6 @@ import importlib
 
 from biorazer_prds.models import (
     Assembly,
-    AssemblyRef,
     AssemblyParaRef,
     AssemblyRealRef,
     Helix,
@@ -27,7 +26,6 @@ def test_public_exports_exist():
     """公共导出应包含统一 Assembly 及各 ref/螺旋子类。"""
     for cls in (
         Assembly,
-        AssemblyRef,
         AssemblyParaRef,
         AssemblyRealRef,
         Helix,
@@ -38,9 +36,8 @@ def test_public_exports_exist():
 
 
 def test_hierarchy():
-    """ref 变体是 Assembly 的子类; 螺旋类挂在 AssemblyParaRef 之下。"""
-    assert issubclass(AssemblyRef, Assembly)
-    assert issubclass(AssemblyParaRef, AssemblyRef)
-    assert issubclass(AssemblyRealRef, AssemblyRef)
+    """ref 变体直接继承 Assembly; 螺旋类挂在 AssemblyParaRef 之下。"""
+    assert issubclass(AssemblyParaRef, Assembly)
+    assert issubclass(AssemblyRealRef, Assembly)
     assert issubclass(CrickHelix, AssemblyParaRef)
     assert issubclass(CCCPHelixBundle, AssemblyParaRef)

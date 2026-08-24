@@ -11,11 +11,11 @@ from dataclasses import dataclass, field
 
 import biotite.structure as bt_struct
 
-from .assembly_ref import AssemblyRef
+from .assembly import Assembly
 
 
 @dataclass
-class AssemblyParaRef(AssemblyRef):
+class AssemblyParaRef(Assembly):
     """参数化参考 Assembly: ref_structure 虚拟, 由拟合参数生成。
 
     Properties
