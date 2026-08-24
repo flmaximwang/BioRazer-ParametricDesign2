@@ -215,6 +215,21 @@ class CrickHelix(AssemblyParaRef):
 
     def _extend_terminus(self, n: int, resn: str, terminus: str):
         """在 terminus 端生成 n 个新残基的 backbone (理想 Crick 延伸)。"""
+        required = {
+            "residue_num",
+            "centroid",
+            "direction",
+            "radius",
+            "omega",
+            "pitch_angle",
+            "phi0",
+        }
+        missing = required - set(self.param)
+        if missing:
+            raise ValueError(
+                "trim_or_extend 伸长需要完整 Crick 参数, 缺少 "
+                f"{sorted(missing)}; 请先调用 fit() 拟合参数"
+            )
         residue_num = len(np.unique(self.structure.res_id))
         kwargs = {**self.param, "residue_num": residue_num + 2 * n}
         helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
