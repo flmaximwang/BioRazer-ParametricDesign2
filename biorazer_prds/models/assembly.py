@@ -120,25 +120,22 @@ class Assembly:
         self._build_subtree(mask, np.arange(len(self.structure)))
         return self
 
-    def add_atoms(self, atom_array, mask):
-        """向本节点追加原子, 并按 mask 分派到子节点 (part)。
+    def add_atoms(self, atom_array, mask=None):
+        """向本节点追加原子, 并按 mask 创建/合并子节点 (part)。
 
-        ``atom_array`` 的原子追加到本节点结构; ``mask`` 把新原子分派到子节点:
-        每个 key 的布尔掩码等长于 ``atom_array``, 指向归属该子节点的原子。若
-        key 已存在于 ``parts``, 新原子追加到该子节点结构末尾 (掩码合并); 否则
-        创建新的子节点并添加对应掩码。全部 mask 取 or 必须完全覆盖
-        ``atom_array``, 否则抛错。随后按 ``merge_up`` 的拼接不变式重建本节点
-        structure 与 mask (structure = 子节点按 parts 顺序拼接, 掩码为连续区间)。
-
-        仅支持已有子节点的内部节点 (叶节点结构原子无法被 mask 保留, 追加会
-        丢失); 且只支持向叶节点子节点追加 (内部子节点追加会破坏其自身不变式)。
+        简单版本: 仅把 ``atom_array`` 追加到本节点 structure, 并按 ``mask``
+        把新原子分派到子节点 — key 已存在则追加到该子节点结构末尾 (合并), 否则
+        创建新的子节点。支持叶节点 (无子节点); 无 ``mask`` (或为空) 时仅追加
+        原子、不建 part。本方法**不更新** ``self.mask`` (保持原样); 需要 mask
+        一致性时另行调用 ``merge_up()``。
 
         Parameters
         ----------
         atom_array : bt_struct.AtomArray
             要追加的原子。
-        mask : dict[str, np.ndarray]
+        mask : dict[str, np.ndarray] | None, optional
             key -> 等长于 ``atom_array`` 的布尔掩码, 分派新原子到对应子节点。
+            None/空则只追加原子。
 
         Returns
         -------
@@ -148,8 +145,9 @@ class Assembly:
             raise TypeError(
                 f"atom_array 必须为 biotite AtomArray, 得到 {type(atom_array).__name__}"
             )
-        if not isinstance(mask, dict) or not mask:
-            raise ValueError("mask 必须为非空 dict")
+        self.structure = bt_struct.concatenate([self.structure, atom_array])
+        if not mask:
+            return self
         for name, m in mask.items():
             m_arr = np.asarray(m, dtype=bool)
             if m_arr.ndim != 1 or len(m_arr) != len(atom_array):
@@ -157,39 +155,17 @@ class Assembly:
                     f"mask[{name!r}] 长度须等于 atom_array 的原子数 "
                     f"({len(atom_array)})"
                 )
-        if not self.parts:
-            raise ValueError(
-                "add_atoms 仅支持已有子节点的内部节点; 叶节点的原结构原子无法 "
-                "被 mask 保留, 请先用 split()/from_atomarray 建立子节点"
-            )
-
-        coverage = np.zeros(len(atom_array), dtype=bool)
-        for m in mask.values():
-            coverage |= np.asarray(m, dtype=bool)
-        if not coverage.all():
-            missing = np.flatnonzero(~coverage)
-            raise ValueError(
-                "add_atoms 的 mask 未完全覆盖 atom_array: "
-                f"{len(missing)} 个原子未被分派 (前 10: {missing[:10].tolist()})"
-            )
-
-        for name, m in mask.items():
-            new_atoms = atom_array[np.asarray(m, dtype=bool)]
+            new_atoms = atom_array[m_arr]
             if name in self.parts:
-                child = self.parts[name]
-                if child.parts:
-                    raise ValueError(
-                        f"子节点 {name!r} 是内部节点, 无法直接向其追加原子; "
-                        "仅支持向叶节点子节点追加"
-                    )
-                child.structure = bt_struct.concatenate([child.structure, new_atoms])
+                self.parts[name].structure = bt_struct.concatenate(
+                    [self.parts[name].structure, new_atoms]
+                )
             else:
                 new_child = type(self)(
                     structure=new_atoms, ref_structure=self.ref_structure
                 )
                 new_child._parent = self
                 self.parts[name] = new_child
-        self._recompute_from_children()
         return self
 
     def remove_atoms(self, mask):
