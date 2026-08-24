@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把 helix bundle 结构居中并输出, 同时生成 PyMOL 绘图脚本 (.pml)。
+"""把 helix bundle 结构居中并输出 (含 loop), 同时生成 PyMOL 绘图脚本 (.pml)。
 
-输入一个 PDB/CIF, 解析为 CCCPHelixBundle: 每个 helix 的范围由用户指定,
-格式 ``chain:start-end`` (如 ``A:1-30``; 无链号的结构可直接写 ``start-end``)。
-然后调用 ``bundle.center()`` 把 bundle 平移至原点并让轴向 (CCCP 拟合的
-x/y/z) 与笛卡尔坐标轴对齐, 最后:
+输入一个 PDB/CIF: 每个 helix 的范围由用户指定, 格式 ``chain:start-end``
+(如 ``A:1-30``; 无链号的结构可直接写 ``start-end``)。脚本把 helix 区构造为
+CCCPHelixBundle (仅含螺旋), 把剩余区域构造为 loop; 对 helix bundle 调用
+``center()`` (平移至原点并使 CCCP 拟合的 x/y/z 轴向与笛卡尔坐标轴对齐),
+取得对应的刚体变换并施加到整体结构 (helix + loop), 实现整体居中, 最后:
 
-- 按 ``-o`` 的后缀写出结构文件 (.pdb / .cif)
+- 按 ``-o`` 的后缀写出完整居中结构文件 (.pdb / .cif)
 - 在同目录生成同名 (仅后缀不同) 的 .pml: 只绘制 x/y/z 三轴 (不载入
   结构), 优先用 biorazer_pymol.mark.arrow 的 ``arrow_pass``
   (/opt/envs/pymol 已装), 不可用时回退为内置 CGO 绘制。
@@ -220,8 +221,24 @@ def main(argv=None):
     for key, spec in zip(masks, specs):
         print(f"  {key}: {spec}  ({masks[key].sum()} 原子)")
 
-    bundle = CCCPHelixBundle.from_atomarray(structure=structure, mask=masks)
+    # 分离 helix 区与剩余区 (loop): helix bundle 只含螺旋, 不再允许连接区
+    helix_mask = np.zeros(len(structure), dtype=bool)
+    for m in masks.values():
+        helix_mask |= m
+    loop_mask = ~helix_mask
+    loop_structure = structure[loop_mask]
+    print(f"  loop: {len(loop_structure)} 原子 (剩余区域)")
+
+    # 把 helix 区构造为 helix bundle: 掩码投影到 helix 子结构, 束内全覆盖,
+    # 满足基类 Assembly.from_atomarray 的全覆盖不变式
+    helix_sub = structure[helix_mask]
+    helix_masks = {key: m[helix_mask] for key, m in masks.items()}
+    bundle = CCCPHelixBundle.from_atomarray(structure=helix_sub, mask=helix_masks)
+
     try:
+        # 先记录居中变换 (center() 就地修改 bundle); 旋转/质心由 CCCP 拟合给出
+        center_rotation = bundle.calculate_center_rotation()
+        bundle_centroid = np.asarray(bundle.centroid).copy()
         bundle.center(
             max_try=args.max_try,
             atol_rot=args.atol_rot,
@@ -240,6 +257,10 @@ def main(argv=None):
     except TimeoutError as e:
         sys.exit(f"error: 居中未收敛: {e}")
 
+    # 把 helix bundle 的居中变换施加到整体结构 (helix 已在 bundle 内居中;
+    # 对 loop 及整体施加同一刚体变换), 实现整体居中且保持原子顺序
+    structure.coord = center_rotation.apply(structure.coord - bundle_centroid)
+
     x, y, z = bundle.xyz
     print(f"拟合 RMSD: {bundle.rmsd:.4f} Å")
     print(f"质心: {np.asarray(bundle.centroid).round(4)}")
@@ -253,10 +274,10 @@ def main(argv=None):
                 Path(args.input).stem + "_centered" + Path(args.input).suffix
             )
         )
-    write_structure(bundle.structure, args.output)
+    write_structure(structure, args.output)
 
     # 轴长按结构尺寸缩放 (覆盖结构外延), 最小 10 Å
-    axis_length = max(10.0, round(float(np.abs(bundle.structure.coord).max()) * 1.2, 1))
+    axis_length = max(10.0, round(float(np.abs(structure.coord).max()) * 1.2, 1))
     pml_path = Path(args.output).with_suffix(".pml")
     write_pml(pml_path, axis_length)
 
