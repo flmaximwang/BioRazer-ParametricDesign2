@@ -35,7 +35,7 @@ class TestFitRmsdReporting:
             helix_num=2, residue_num=12, centroid=[0, 0, 0]
         )
         obs = base + rng.normal(0, 0.4, base.shape)
-        params, rmsd, xyz = fit_cc_by_cccp(obs)
+        params, rmsd, xyz, structure_list = fit_cc_by_cccp(obs)
         # 每原子 RMSD = sqrt(mean over atoms of |dx|^2)
         true = np.sqrt(np.mean(np.sum((xyz - obs) ** 2, axis=2)))
         np.testing.assert_allclose(rmsd, true, rtol=1e-6)
@@ -62,6 +62,47 @@ class TestFitRmsdReporting:
         fit_coord = bundle.ref_structure.coord
         true = np.sqrt(np.mean(np.sum((obs - fit_coord) ** 2, axis=1)))
         np.testing.assert_allclose(bundle.rmsd, true, rtol=1e-4)
+
+
+class TestFitTrajectory:
+    """fit_cc_by_cccp 返回每一步 optimize 生成的 structure 列表 (debug 用)。"""
+
+    def test_returns_one_structure_per_optimize_step(self):
+        rng = np.random.default_rng(0)
+        base, _, _ = generate_cc_ca_by_cccp(
+            helix_num=2, residue_num=12, centroid=[0, 0, 0]
+        )
+        obs = base + rng.normal(0, 0.2, base.shape)
+        params, rmsd, xyz, structure_list = fit_cc_by_cccp(obs)
+        # Stage 0 + 10 轮 * 3 个 stage = 31 步
+        assert len(structure_list) == 1 + 3 * 10
+        for arr in structure_list:
+            assert isinstance(arr, bt_struct.AtomArray)
+            assert len(arr) == 2 * 12  # helix_num * residue_num
+        # 最后一个 structure 坐标应等于最终拟合坐标
+        np.testing.assert_allclose(
+            structure_list[-1].coord, xyz.reshape(-1, 3), atol=1e-9
+        )
+
+    def test_bundle_fit_stores_trajectory_on_self(self):
+        base, _, _ = generate_cc_ca_by_cccp(
+            helix_num=2, residue_num=10, centroid=[0, 0, 0]
+        )
+        aa = bt_struct.AtomArray(20)
+        aa.coord = base.reshape(-1, 3)
+        aa.atom_name = np.array(["CA"] * 20)
+        aa.element = np.array(["C"] * 20)
+        aa.chain_id = np.array(["X"] * 10 + ["Y"] * 10)
+        aa.res_id = np.array(list(range(1, 11)) * 2)
+        aa.res_name = np.array(["GLY"] * 20)
+        m1 = np.zeros(20, bool); m1[:10] = True
+        m2 = np.zeros(20, bool); m2[10:] = True
+        bundle = CCCPHelixBundle.from_atomarray(structure=aa, mask={"h1": m1, "h2": m2})
+        bundle.fit()
+        assert len(bundle.fit_trajectory) == 1 + 3 * 10
+        for arr in bundle.fit_trajectory:
+            assert isinstance(arr, bt_struct.AtomArray)
+            assert len(arr) == 20
 
 
 class TestGenerateRefStructure:

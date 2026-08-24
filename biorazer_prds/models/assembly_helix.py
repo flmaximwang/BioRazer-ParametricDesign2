@@ -412,12 +412,14 @@ class CCCPHelixBundle(AssemblyParaRef):
         ref_ca = bt_struct.concatenate(helix_ca_list)
 
         _log("Running staged CCCP bundle optimization")
-        param, rmsd, _ = fit_cc_by_cccp(
+        param, rmsd, _, structure_list = fit_cc_by_cccp(
             ca_coord_obs,
             params_not_to_fit=self.params_not_to_fit,
             verbose=verbose,
             **self.initial_param,
         )
+        # 每一步 optimize 生成的 structure 轨迹 (debug 用)
+        self.fit_trajectory = structure_list
 
         self.param = param
         z = param["z"]

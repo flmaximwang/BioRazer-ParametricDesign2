@@ -295,6 +295,9 @@ def fit_cc_by_cccp(
         Root-mean-square deviation between fitted and observed CA coordinates.
     xyz : np.ndarray
         Generated fitted CA coordinates from final parameters.
+    structure_list : list of biotite.structure.AtomArray
+        每一步 optimize 之后, 由当前参数生成的 CA structure 列表
+        (用于 debug 观察拟合轨迹); 长度 = 1 + 3 * 10 (Stage 0 + 每轮 3 个 stage)。
     """
 
     def _log(message: str):
@@ -373,6 +376,14 @@ def fit_cc_by_cccp(
             len(initial_params[key]) == initial_params["helix_num"]
         ), f"Length of {key} must match helix_num"
 
+    # 每一步 optimize 后, 把当前 stage_params 生成的 structure 追加进列表,
+    # 便于 debug 观察拟合轨迹。
+    structure_list = []
+
+    def _record_structure():
+        _, _, arr = generate_cc_ca_by_cccp(**stage_params)
+        structure_list.append(arr)
+
     # Stage 0: quickly place the model by optimizing only centroid.
     _log("Stage 0/3: optimize centroid")
     params_to_optimize = ["centroid"]
@@ -381,6 +392,7 @@ def fit_cc_by_cccp(
         initial_params=initial_params,
         param_names_to_optimize=_exclude_params(params_to_optimize, params_not_to_fit),
     )
+    _record_structure()
 
     # Multi-stage refinement loop:
     # 1) angular/offset alignment,
@@ -419,6 +431,7 @@ def fit_cc_by_cccp(
                 params_to_optimize, params_not_to_fit
             ),
         )
+        _record_structure()
 
         # Stage 2: update global superhelical scaffold.
         param_names_to_optimize = [
@@ -434,6 +447,7 @@ def fit_cc_by_cccp(
                 param_names_to_optimize, params_not_to_fit
             ),
         )
+        _record_structure()
 
         # Stage 3: joint refinement of all major geometric parameters.
         param_names_to_optimize = [
@@ -457,6 +471,7 @@ def fit_cc_by_cccp(
                 param_names_to_optimize, params_not_to_fit
             ),
         )
+        _record_structure()
 
     # ``result.fun`` is already the RMSD of the final parameters (returned by
     # ``_scalar_for_fit_cc_by_cccp``), so report it directly instead of
@@ -465,4 +480,4 @@ def fit_cc_by_cccp(
     # Regenerate coordinates and normalized parameter dictionary from final fit.
     xyz, params, _ = generate_cc_ca_by_cccp(**stage_params)
     _log(f"Fit completed with RMSD={rmsd:.4f}")
-    return params, rmsd, xyz
+    return params, rmsd, xyz, structure_list
