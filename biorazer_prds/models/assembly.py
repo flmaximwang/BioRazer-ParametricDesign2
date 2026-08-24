@@ -254,64 +254,16 @@ class Assembly:
             )
 
     # ------------------------------------------------------------------
-    # 子 Assembly 之间的变换 (旧 Assembly 按索引, 现改按 name)
+    # 任意两个 Assembly 之间的变换 (static; 两参数都需定义 centroid 与 xyz)
     # ------------------------------------------------------------------
 
-    def center_part(self, name, max_try=10, atol_rot=1e-5, atol_trans=1e-5,
-                    verbose=False):
-        """居中指定子 Assembly, 并对所有子 Assembly 施加同一个刚体变换。
+    @staticmethod
+    def calculate_rotation_between(part_1, part_2, atol=1e-3):
+        """计算把 part_1 的局部坐标轴对齐到 part_2 的旋转。
 
-        这是旧 ``Assembly.center(part_index)`` 的语义: 以子节点 ``name`` 为锚,
-        计算使其居中的旋转+平移, 然后作用到全部子节点。
+        要求 part_1 已对齐规范轴 (与旧实现语义一致)。part_1 / part_2 需实现
+        ``centroid`` 与 ``xyz`` (如螺旋/束这类具体 Assembly)。
         """
-        self.check_part_name(name)
-
-        def _log(message: str):
-            if verbose:
-                print(f"[Assembly.center_part({name})] {message}")
-
-        if max_try <= 0:
-            raise ValueError("max_try must be a positive integer")
-        if atol_rot < 0 or atol_trans < 0:
-            raise ValueError("atol_rot and atol_trans must be non-negative")
-
-        counter = 0
-        while True:
-            counter += 1
-            center_part = self.parts[name]
-            center_translation = center_part.calculate_center_translation()
-            center_rotation = center_part.calculate_center_rotation()
-
-            for part in self.parts.values():
-                part.translate(*center_translation)
-                part.rotate(
-                    center_rotation, centroid_to_origin=False, XYZ_to_xyz=False
-                )
-
-            euler_angles = self.parts[name].calculate_center_rotation().as_euler(
-                "xyz", degrees=False
-            )
-            translation = self.parts[name].calculate_center_translation()
-            _log(
-                f"{counter}/{max_try}: euler(rad)={np.array2string(euler_angles, precision=4)}, "
-                f"translation={np.array2string(translation, precision=4)}"
-            )
-
-            if np.allclose(euler_angles, [0, 0, 0], atol=atol_rot) and np.allclose(
-                translation, [0, 0, 0], atol=atol_trans
-            ):
-                _log(f"Converged in {counter} iterations")
-                break
-            if counter >= max_try:
-                raise TimeoutError(
-                    f"Failed to center assembly[{name}] after {max_try} attempts."
-                )
-
-    def calculate_rotation_between(self, name_1, name_2, atol=1e-3):
-        """计算把子 Assembly name_1 对齐到 name_2 的旋转 (要求 name_1 已对齐规范轴)。"""
-        self.check_part_name(name_1)
-        self.check_part_name(name_2)
-        part_1 = self.parts[name_1]
         x, y, z = part_1.xyz
         flag = (
             np.allclose(x, [1, 0, 0], atol=atol)
@@ -320,27 +272,29 @@ class Assembly:
         )
         if not flag:
             raise ValueError(
-                f"Assembly[{name_1}] is not aligned with the reference axes within "
-                f"atol={atol}."
+                f"part_1 is not aligned with the reference axes within atol={atol}."
             )
-        part_2 = self.parts[name_2]
         x, y, z = part_2.xyz
         return calculate_rotation(x, y, z)
 
-    def calculate_quat_between(self, name_1, name_2, atol=1e-3):
-        rotation = self.calculate_rotation_between(name_1, name_2, atol=atol)
+    @staticmethod
+    def calculate_quat_between(part_1, part_2, atol=1e-3):
+        """计算把 part_1 对齐到 part_2 的旋转的四元数 (x, y, z, w)。"""
+        rotation = Assembly.calculate_rotation_between(part_1, part_2, atol=atol)
         return rotation.as_quat(scalar_first=False, canonical=True)
 
-    def calculate_euler_between(self, name_1, name_2, axis_spec, degrees=False,
+    @staticmethod
+    def calculate_euler_between(part_1, part_2, axis_spec, degrees=False,
                                 atol=1e-3):
-        rotation = self.calculate_rotation_between(name_1, name_2, atol=atol)
+        """计算把 part_1 对齐到 part_2 的旋转的欧拉角。"""
+        rotation = Assembly.calculate_rotation_between(part_1, part_2, atol=atol)
         return rotation.as_euler(axis_spec, degrees=degrees)
 
-    def calculate_translation_between(self, name_1, name_2):
-        """计算把子 Assembly name_1 平移到 name_2 的平移向量。"""
-        self.check_part_name(name_1)
-        self.check_part_name(name_2)
-        return self.parts[name_2].centroid - self.parts[name_1].centroid
+    @staticmethod
+    def calculate_translation_between(part_1, part_2):
+        """计算把 part_1 平移到 part_2 的平移向量
+        (part_2.centroid - part_1.centroid)。"""
+        return part_2.centroid - part_1.centroid
 
     # ------------------------------------------------------------------
     # IO

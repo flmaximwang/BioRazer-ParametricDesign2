@@ -150,3 +150,84 @@ class TestRoundTrip:
         assert len(root.mask["leafB"]) == len(root.structure)
         assert len(grand_a.mask["a1"]) == len(grand_a.structure)
         assert len(grand_a.mask["a2"]) == len(grand_a.structure)
+
+
+class _AxisAssembly(Assembly):
+    """提供局部坐标轴的 Assembly 子类 (用于 center / between 测试)。"""
+
+    def __init__(self, structure, x=(1.0, 0, 0), y=(0.0, 1, 0), z=(0.0, 0, 1)):
+        super().__init__(structure=structure)
+        self._x = np.asarray(x, float)
+        self._y = np.asarray(y, float)
+        self._z = np.asarray(z, float)
+
+    @property
+    def xyz(self):
+        return self._x, self._y, self._z
+
+
+class TestCenterThenMergeUp:
+    """center_part 已移除; 正确顺序 = 子节点 center() + 父节点 merge_up()。"""
+
+    def test_center_child_then_merge_up_recomputes_parent(self):
+        child_a = _AxisAssembly(_atoms(3, 0, "A"))  # 规范轴, center 只做平移
+        child_b = _AxisAssembly(_atoms(2, 10, "B"))
+        parent = Assembly()
+        parent.append_part("a", child_a).append_part("b", child_b)
+
+        child_a.center(max_try=10)
+        # 平移后 a 的质心回到原点
+        np.testing.assert_allclose(child_a.centroid, [0, 0, 0], atol=1e-6)
+
+        parent.merge_up()
+        assert len(parent.structure) == 5
+        # a 居中后, 父结构里 a 区间的质心也应为 0
+        a_coords = parent.structure.coord[parent.mask["a"]]
+        np.testing.assert_allclose(a_coords.mean(axis=0), [0, 0, 0], atol=1e-6)
+        # mask 与父结构同源
+        assert parent.mask["a"].sum() == 3
+        assert parent.mask["b"].sum() == 2
+
+    def test_center_part_is_removed(self):
+        parent = Assembly()
+        assert not hasattr(parent, "center_part")
+
+
+class TestStaticBetween:
+    """calculate_*_between 为 staticmethod, 可直接对任意两个 Assembly 计算。"""
+
+    def test_staticmethod(self):
+        import inspect
+
+        # 声明为 staticmethod (类属性是 staticmethod 对象, 而非普通函数/绑定方法)
+        assert isinstance(
+            inspect.getattr_static(Assembly, "calculate_rotation_between"),
+            staticmethod,
+        )
+        assert isinstance(
+            inspect.getattr_static(Assembly, "calculate_translation_between"),
+            staticmethod,
+        )
+
+    def test_translation_between(self):
+        a = _AxisAssembly(_atoms(3, 0, "A"))
+        b = _AxisAssembly(_atoms(2, 10, "B"))
+        t = Assembly.calculate_translation_between(a, b)
+        np.testing.assert_allclose(t, b.centroid - a.centroid)
+
+    def test_rotation_between_identity_for_canonical(self):
+        a = _AxisAssembly(_atoms(3, 0, "A"))  # 规范轴
+        b = _AxisAssembly(_atoms(2, 10, "B"))  # 规范轴
+        rot = Assembly.calculate_rotation_between(a, b)
+        np.testing.assert_allclose(rot.as_matrix(), np.eye(3), atol=1e-6)
+
+    def test_quat_and_euler_consistent(self):
+        a = _AxisAssembly(_atoms(3, 0, "A"))
+        b = _AxisAssembly(_atoms(2, 10, "B"))
+        q = Assembly.calculate_quat_between(a, b)
+        e = Assembly.calculate_euler_between(a, b, "xyz")
+        from scipy.spatial.transform import Rotation as R
+
+        np.testing.assert_allclose(
+            R.from_quat(q).as_euler("xyz"), e, atol=1e-6
+        )
