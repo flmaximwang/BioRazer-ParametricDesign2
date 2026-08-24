@@ -438,7 +438,7 @@ class Assembly:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_atomarray(cls, *, structure: bt_struct.AtomArray,
+    def from_atomarray(cls, structure: bt_struct.AtomArray,
                        ref_structure: bt_struct.AtomArray = None,
                        mask: "str | dict" = "all") -> Self:
         """从 AtomArray 构建 Assembly。
