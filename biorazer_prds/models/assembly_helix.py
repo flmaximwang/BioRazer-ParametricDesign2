@@ -444,52 +444,30 @@ class CCCPHelixBundle(AssemblyParaRef):
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
         return structure_list
 
-    def trim_or_extend(
-        self, helix_index: int, n: int, terminus: str, resn: str = "GLY"
-    ):
-        """延长/缩短束中某一根螺旋的一端 (仅 backbone)。
+    def trim_or_extend(self, spec: dict, resn: str = "GLY"):
+        """按束一次性伸长/缩短多根螺旋的末端 (仅 backbone)。
 
-        仿照 ``CrickHelix.trim_or_extend``, 但伸长几何由 **束参数** 生成:
-        束中每根螺旋是超螺旋 (superhelical) 弯曲轨迹, 用 ``self.param`` 的 CCCP
-        参数重新生成该螺旋理想轨迹, 取末端新增残基, 再接回原螺旋并
-        ``pulchra_fix_backbone``。缩短则直接删除该螺旋末端残基。
+        ``spec`` : dict[int, tuple[int, int]]
+            螺旋顺序下标 -> (N 端修改量, C 端修改量)。每项修改量为带符号整数:
+            ``>0`` 伸长该端, ``<0`` 缩短该端, ``0`` 不变。同一根螺旋的 N、C 两端
+            在一次生成中同时处理 (每根螺旋只 regenerate 一次), 避免分次伸长导致
+            residue_t 网格奇偶相性错位 (偶数长度网格为半整数、奇数长度为整数,
+            分次切换会错相位)。
 
-        Parameters
-        ----------
-        helix_index : int
-            要操作的螺旋在 ``self.parts`` 中的顺序下标 (束内螺旋按子节点顺序
-            识别, 与 key 名无关)。
-        n : int
-            有符号残基数: n > 0 伸长 n 个残基, n < 0 缩短 |n| 个残基。
-        terminus : str
-            "N" 或 "C" (不支持两端)。
-        resn : str
-            新增残基名称 (仅影响伸长部分; 缩短无新增)。单字母或三字母,
-            大小写不敏感; 统一转大写。
+        伸长部分的几何由束参数 ``self.param`` 生成的理想超螺旋轨迹提供, 按该螺旋
+        当前末端的 residue_t 等相位续接; 缩短则直接删去末端残基。
 
-        Notes
-        -----
-        只改该螺旋的几何, 不保持"束内各螺旋等长"不变式: 伸长/缩短单根螺旋后,
-        束参数 ``residue_num`` 不再代表所有螺旋, 对修改后的束再 ``fit()`` 会因
-        长度不一致报错 (等长断言)。
+        全部执行完后 ``self.param`` 被清空, 束不再携带已拟合参数 (避免后续误用与
+        结构不一致的旧参数); 故同一次调用内所有想延长/缩短的螺旋都要写进 ``spec``。
         """
         if not self.parts:
             raise ValueError("trim_or_extend 需要子螺旋 (请用 from_atomarray 构建束)")
-        if not isinstance(helix_index, int):
+        if not isinstance(spec, dict):
             raise TypeError(
-                f"helix_index 必须为整数, 得到 {type(helix_index).__name__}"
+                f"spec 必须为 dict (helix_index -> (n_N, n_C)), 得到 {type(spec).__name__}"
             )
-        if helix_index < 0 or helix_index >= len(self.parts):
-            raise IndexError(
-                f"helix_index {helix_index} 越界: 束共 {len(self.parts)} 根螺旋"
-            )
-        if terminus not in ("N", "C"):
-            raise ValueError(f"terminus 仅支持 'N'/'C', 得到 {terminus!r}")
-        if not isinstance(n, int):
-            raise TypeError(f"n 必须为整数, 得到 {type(n).__name__}")
-        if n == 0:
-            return self
 
+        # resn 统一转大写三字母
         if len(resn) == 1:
             if resn.upper() not in AMINO_ACIDS_1LETTER:
                 raise ValueError(f"无效单字母残基: {resn!r}")
@@ -501,27 +479,68 @@ class CCCPHelixBundle(AssemblyParaRef):
         else:
             raise ValueError(f"resn 必须为单字母或三字母残基名, 得到 {resn!r}")
 
-        key = list(self.parts)[helix_index]
-        helix_part = self.parts[key]
-        new_part = copy.copy(helix_part)
-        if n > 0:
-            new_part.add_atoms(self._extend_helix_fragment(helix_index, n, resn, terminus))
-            # 补全 backbone, 使新残基与既有螺旋的 junction 正确; pulchra 保留
-            # res_id, 再按 res_id 稳定排序使 N 端新增残基回到链首。
-            new_part.structure = pulchra_fix_backbone(new_part.structure)
+        keys = list(self.parts)
+        for helix_index, (n_N, n_C) in spec.items():
+            if not isinstance(helix_index, int):
+                raise TypeError(
+                    f"helix_index 必须为整数, 得到 {type(helix_index).__name__}"
+                )
+            if helix_index < 0 or helix_index >= len(keys):
+                raise IndexError(
+                    f"helix_index {helix_index} 越界: 束共 {len(keys)} 根螺旋"
+                )
+            if not (isinstance(n_N, int) and isinstance(n_C, int)):
+                raise TypeError(
+                    f"每项须为 (n_N, n_C) 整数对, 得到 "
+                    f"{type(n_N).__name__}, {type(n_C).__name__}"
+                )
+            if n_N == 0 and n_C == 0:
+                continue
+
+            key = keys[helix_index]
+            helix_part = self.parts[key]
+            new_part = copy.copy(helix_part)
+
+            nN_trim = max(-n_N, 0)
+            nC_trim = max(-n_C, 0)
+            nN_ext = max(n_N, 0)
+            nC_ext = max(n_C, 0)
+
+            # 缩短: 删去末端残基
+            if nN_trim or nC_trim:
+                new_part.remove_atoms(
+                    self._trim_end_mask(new_part.structure, nN_trim, nC_trim)
+                )
+
+            # 伸长: 单次生成, N/C 两端等相位续接
+            if nN_ext or nC_ext:
+                for frag in self._extend_end_fragments(
+                    helix_index, nN_trim, nC_trim, nN_ext, nC_ext, resn
+                ):
+                    new_part.add_atoms(frag)
+                # 先按 res_id 排好序再交 pulchra, 保证链内残基按序列顺序重建主链
+                order = np.argsort(new_part.structure.res_id, kind="stable")
+                new_part.structure = new_part.structure[order]
+                new_part.structure = pulchra_fix_backbone(new_part.structure)
+
             order = np.argsort(new_part.structure.res_id, kind="stable")
             new_part.structure = new_part.structure[order]
-        else:
-            new_part.remove_atoms(self._trim_helix_mask(helix_index, -n, terminus))
-        new_part.param = {
-            **helix_part.param,
-            "residue_num": len(np.unique(new_part.structure.res_id)),
-        }
-        new_part.ref_structure = None
-        return helix_part.replace_with(new_part)
+            new_part.param = {}
+            new_part.ref_structure = None
+            helix_part.replace_with(new_part)
 
-    def _extend_helix_fragment(self, helix_index: int, n: int, resn: str, terminus: str):
-        """用束参数生成 helix_index 螺旋末端 n 个新残基的 CA, 供 add_atoms 追加。"""
+        self.param = {}
+        return self
+
+    def _extend_end_fragments(
+        self, helix_index, nN_trim, nC_trim, nN_ext, nC_ext, resn
+    ):
+        """单次生成 helix_index 螺旋 N、C 两端共 (nN_ext + nC_ext) 个新残基的 CA。
+
+        在同一根螺旋的拟合 residue_t 网格上, 以当前 (缩短后) N/C 末端的
+        residue_t 为基准, 向外各续 nN_ext / nC_ext 个残基 (与网格奇偶性一致),
+        返回按 res_id 偏移好的 CA-only 结构列表 (N 端片段 + C 端片段)。
+        """
         required = {
             "helix_num",
             "residue_num",
@@ -548,30 +567,50 @@ class CCCPHelixBundle(AssemblyParaRef):
                 f"{sorted(missing)}; 请先调用 fit() 拟合参数"
             )
         helix_part = self.parts[list(self.parts)[helix_index]]
-        residue_num = len(np.unique(helix_part.structure.res_id))
-        # residue_t 关于 0.5 中心对称: 以 N+2n 重新生成后, 原 N 个残基仍居中,
-        # 取新轨迹最前/最后 n 个即为该螺旋末端的理想超螺旋延伸。
-        kwargs = {**self.param, "residue_num": residue_num + 2 * n}
-        coords, _, _ = generate_cc_ca_by_cccp(**kwargs)
-        new_ca = coords[helix_index][:n] if terminus == "N" else coords[helix_index][-n:]
-        new_structure = ca_xyz_to_atom_array(
-            new_ca,
-            chain_id_i=helix_part.structure.chain_id[0],
-            res_name=resn,
-        )
-        res_ids = np.unique(helix_part.structure.res_id)
-        offset = min(res_ids) - 1 - n if terminus == "N" else max(res_ids)
-        new_structure.res_id += offset
-        return new_structure
+        res_ids = np.unique(helix_part.structure.res_id)   # 原始 res_id (升序)
+        L0 = len(res_ids)
+        orig_min = int(res_ids.min())
 
-    def _trim_helix_mask(self, helix_index: int, n: int, terminus: str):
-        """返回 helix_index 螺旋末端要删除的 n 个残基的布尔掩码, 供 remove_atoms 使用。"""
-        helix_part = self.parts[list(self.parts)[helix_index]]
-        res_ids = helix_part.structure.res_id
+        # 拟合把同一根螺旋原始残基 i (0-index) 映射到 residue_t = 0.5 - L0/2 + i。
+        # 缩短后残余 N/C 末端对应的 residue_t:
+        rt_n_term = 0.5 - L0 / 2 + nN_trim
+        rt_c_term = 0.5 + L0 / 2 - 1 - nC_trim
+
+        # 生成的网格 R 需覆盖两端 target residue_t, 且与 L0 同奇偶
+        R = L0 + 2 * max(nN_ext, nC_ext, nN_trim, nC_trim)
+        coords, _, _ = generate_cc_ca_by_cccp(**{**self.param, "residue_num": R})
+        rt_gen = np.arange(0.5 - R / 2, 0.5 + R / 2)
+        hc = coords[helix_index]
+        chain_id0 = helix_part.structure.chain_id[0]
+
+        out = []
+        if nN_ext:
+            ts = rt_n_term - np.arange(nN_ext, 0, -1)        # [term-N-nN_ext, ..., term-N-1]
+            idx = [int(np.argmin(np.abs(rt_gen - t))) for t in ts]
+            s = ca_xyz_to_atom_array(hc[idx], chain_id_i=chain_id0, res_name=resn)
+            cur_min = orig_min + nN_trim
+            s.res_id += (cur_min - nN_ext) - 1               # -> [cur_min-nN_ext, ..., cur_min-1]
+            out.append(s)
+        if nC_ext:
+            ts = rt_c_term + np.arange(1, nC_ext + 1)
+            idx = [int(np.argmin(np.abs(rt_gen - t))) for t in ts]
+            s = ca_xyz_to_atom_array(hc[idx], chain_id_i=chain_id0, res_name=resn)
+            cur_max = orig_min + L0 - 1 - nC_trim
+            s.res_id += cur_max                              # -> [cur_max+1, ..., cur_max+nC_ext]
+            out.append(s)
+        return out
+
+    def _trim_end_mask(self, structure, nN, nC):
+        """返回要删除的 N 端 nN 个 + C 端 nC 个残基的布尔掩码。"""
+        res_ids = structure.res_id
         unique_res = np.unique(res_ids)
-        if n >= len(unique_res):
+        if nN + nC >= len(unique_res):
             raise ValueError(
-                f"无法缩短 {n} 个残基: 螺旋仅 {len(unique_res)} 个残基"
+                f"无法缩短 {nN + nC} 个残基: 螺旋仅 {len(unique_res)} 个残基"
             )
-        remove = unique_res[:n] if terminus == "N" else unique_res[-n:]
-        return np.isin(res_ids, remove)
+        remove = set()
+        if nN:
+            remove.update(unique_res[:nN])
+        if nC:
+            remove.update(unique_res[-nC:])
+        return np.isin(res_ids, list(remove))

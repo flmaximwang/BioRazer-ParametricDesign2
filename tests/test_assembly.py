@@ -685,63 +685,114 @@ class TestCCCPTrimOrExtend:
         h0_before = bundle.parts["h1"].structure.coord.copy()
         h1_before = bundle.parts["h2"].structure.coord.copy()
         new_len = len(np.unique(bundle.parts["h1"].structure.res_id)) + 2
+        z_min_old = h0_before[:, 2].min()
 
-        result = bundle.trim_or_extend(0, 2, "N")
+        result = bundle.trim_or_extend({0: (2, 0)})
 
-        # 束结构被重建, helix 0 变长 2, helix 1 不变
-        assert result is bundle.parts["h1"]
+        # 批量 API 返回束自身; helix 0 变长 2, helix 1 不变
+        assert result is bundle
         assert len(np.unique(bundle.parts["h1"].structure.res_id)) == new_len
         assert len(np.unique(bundle.parts["h2"].structure.res_id)) == new_len - 2
         np.testing.assert_allclose(
             bundle.parts["h2"].structure.coord, h1_before, atol=1e-12
         )
         # 新增 N 端残基在质心 z 更负的一端 (沿 +z 前进, N 端在 -z)
-        z_min_old = h0_before[:, 2].min()
         assert bundle.parts["h1"].structure.coord[:, 2].min() < z_min_old
+        # 执行完后 param 被清空
+        assert bundle.param == {}
 
     def test_extend_helix1_cterm(self):
         bundle = self._make_bundle()
         h0_before = bundle.parts["h1"].structure.coord.copy()
         new_len = len(np.unique(bundle.parts["h2"].structure.res_id)) + 3
 
-        bundle.trim_or_extend(1, 3, "C")
+        bundle.trim_or_extend({1: (0, 3)})
         assert len(np.unique(bundle.parts["h2"].structure.res_id)) == new_len
         # helix 0 不受影响
         np.testing.assert_allclose(
             bundle.parts["h1"].structure.coord, h0_before, atol=1e-12
         )
-        # C 端新残基在 +z 更远端
-        z_max_old = h0_before[:, 2].max()
-        assert bundle.parts["h2"].structure.coord[:, 2].max() >= z_max_old
+        # C 端新残基在 +z 更远端; param 已清空
+        assert bundle.parts["h2"].structure.coord[:, 2].max() > h0_before[:, 2].max()
+        assert bundle.param == {}
+
+    def test_extend_both_ends_single_regeneration_matches_ideal(self):
+        """同一根螺旋 N、C 两端在一次调用中处理, 新残基逐原子贴合理想超螺旋。
+
+        若仍按旧的分次生成, 第二次生成的 residue_t 网格奇偶性会与既有螺旋错位,
+        新残基会偏离理想轨迹 ~2 Å。干净 from_param 束 (拟合残差≈0) 应逐原子一致。
+        """
+        from biorazer_prds.params.cccp.generate import generate_cc_ca_by_cccp
+
+        bundle = self._make_bundle()   # 7-mer, 拟合残差≈0
+        pm = bundle.param
+        L0, nN, nC = 7, 1, 2
+        R = L0 + 2 * max(nN, nC)
+        coords, _, _ = generate_cc_ca_by_cccp(**{**pm, "residue_num": R})
+        extra = (R - L0) // 2
+        # 理想延长序列 (res_id 升序): [newN, base, newC] 恰为连续区块
+        expect = coords[0][extra - nN : extra + L0 + nC]
+
+        bundle.trim_or_extend({0: (nN, nC)})
+        ca = bundle.parts["h1"].structure
+        ca = ca[ca.atom_name == "CA"]
+        o = np.argsort(ca.res_id, kind="stable")
+        np.testing.assert_allclose(ca.coord[o], expect, atol=1e-2)
+        assert bundle.param == {}
+        # h2 未参与, 保持 7 残基
+        assert len(np.unique(bundle.parts["h2"].structure.res_id)) == L0
 
     def test_trim_helix(self):
         bundle = self._make_bundle()
         h1_before = bundle.parts["h2"].structure.coord.copy()
         new_len = len(np.unique(bundle.parts["h1"].structure.res_id)) - 2
 
-        bundle.trim_or_extend(0, -2, "C")
+        bundle.trim_or_extend({0: (0, -2)})
         assert len(np.unique(bundle.parts["h1"].structure.res_id)) == new_len
         np.testing.assert_allclose(
             bundle.parts["h2"].structure.coord, h1_before, atol=1e-12
         )
 
+    def test_batch_multiple_helices(self):
+        """一次调用同时改多根螺旋: 用同一份拟合参数, 单次生成各自的延长。"""
+        bundle = self._make_bundle()
+        n0 = len(np.unique(bundle.parts["h1"].structure.res_id))
+        n1 = len(np.unique(bundle.parts["h2"].structure.res_id))
+
+        bundle.trim_or_extend({0: (1, 0), 1: (0, 2)})
+        assert len(np.unique(bundle.parts["h1"].structure.res_id)) == n0 + 1
+        assert len(np.unique(bundle.parts["h2"].structure.res_id)) == n1 + 2
+        assert bundle.param == {}
+
     def test_validation_errors(self):
         bundle = self._make_bundle()
         with pytest.raises(IndexError, match="越界"):
-            bundle.trim_or_extend(5, 1, "N")
-        with pytest.raises(ValueError, match="terminus"):
-            bundle.trim_or_extend(0, 1, "X")
+            bundle.trim_or_extend({5: (1, 0)})
+        with pytest.raises(ValueError, match="残基"):
+            bundle.trim_or_extend({0: (1, 0)}, resn="X")
         with pytest.raises(TypeError, match="整数"):
-            bundle.trim_or_extend(0, 1.5, "N")
+            bundle.trim_or_extend({0: (1.5, 0)})
+        with pytest.raises(TypeError, match="整数"):
+            bundle.trim_or_extend({0: (1, "C")})
+        with pytest.raises(TypeError, match="spec"):
+            bundle.trim_or_extend([(0, 2)])
         # 缩短到不足 1 个残基
         with pytest.raises(ValueError, match="无法缩短"):
-            bundle.trim_or_extend(0, -7, "N")
+            bundle.trim_or_extend({0: (-7, 0)})
+        with pytest.raises(ValueError, match="无法缩短"):
+            bundle.trim_or_extend({0: (-4, -4)})
 
     def test_extend_missing_params_raises(self):
         bundle = self._make_bundle()
         bundle.param = {"residue_num": 7}  # 破坏参数完整性
         with pytest.raises(ValueError, match="缺少"):
-            bundle.trim_or_extend(0, 2, "N")
+            bundle.trim_or_extend({0: (2, 0)})
+        # 纯缩短不需要参数 (不会触发 generate)
+        bundle2 = self._make_bundle()
+        bundle2.param = {"residue_num": 7}
+        n0 = len(np.unique(bundle2.parts["h1"].structure.res_id))
+        bundle2.trim_or_extend({0: (-1, 0)})
+        assert len(np.unique(bundle2.parts["h1"].structure.res_id)) == n0 - 1
 
     def test_leaf_bundle_raises(self):
         from biorazer_prds.models.assembly_helix import CCCPHelixBundle
@@ -749,7 +800,7 @@ class TestCCCPTrimOrExtend:
         leaf = CCCPHelixBundle.from_param(helix_num=2, residue_num=7)
         assert not leaf.parts
         with pytest.raises(ValueError, match="子螺旋"):
-            leaf.trim_or_extend(0, 1, "N")
+            leaf.trim_or_extend({0: (1, 0)})
 
 
 class TestAddAtoms:
