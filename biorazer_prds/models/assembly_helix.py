@@ -15,12 +15,7 @@ from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
 
 
 @dataclass
-class Helix(AssemblyParaRef):
-    """单条螺旋 (叶节点; structure 即螺旋, 不再有 mask key)。"""
-
-
-@dataclass
-class CrickHelix(Helix):
+class CrickHelix(AssemblyParaRef):
     """单条 Crick 螺旋的 Assembly (叶节点, 继承 AssemblyParaRef)。
 
     Params
@@ -126,6 +121,7 @@ class CrickHelix(Helix):
 
         叶节点: structure 即整条螺旋, 直接用其 CA 原子拟合。
         """
+
         def _log(message: str):
             if verbose:
                 print(f"[CrickHelix.fit] {message}")
@@ -329,6 +325,7 @@ class CCCPHelixBundle(AssemblyParaRef):
         这样 ``center()`` 等对父 structure 施加的刚体变换能被 fit 感知
         (rotate/translate 不更新子节点, 若读子节点会导致 center 死循环)。
         """
+
         def _log(message: str):
             if verbose:
                 print(f"[CCCPHelixBundle.fit] {message}")
