@@ -324,16 +324,20 @@ class CCCPHelixBundle(AssemblyParaRef):
     def fit(self, verbose: bool = False):
         """把多螺旋束拟合成 CCCP 参数化模型。
 
-        每条螺旋是一个叶子节点, 其 structure 即该螺旋。
+        每条螺旋由 ``self.mask`` 在 ``self.structure`` 上按有序掩码切片识别
+        (与 key 名无关)。直接读 ``self.structure`` + mask 而非子节点 structure:
+        这样 ``center()`` 等对父 structure 施加的刚体变换能被 fit 感知
+        (rotate/translate 不更新子节点, 若读子节点会导致 center 死循环)。
         """
         def _log(message: str):
             if verbose:
                 print(f"[CCCPHelixBundle.fit] {message}")
 
         _log(f"Validating CA lengths for {self.helix_num} helices")
-        helix_nodes = list(self.parts.values())
+        helix_names = list(self.parts)
         helix_lens = [
-            np.sum(node.structure.atom_name == "CA") for node in helix_nodes
+            np.sum(self.structure[self.mask[name]].atom_name == "CA")
+            for name in helix_names
         ]
 
         assert (
@@ -349,9 +353,10 @@ class CCCPHelixBundle(AssemblyParaRef):
         ca_coord_obs = np.zeros(
             shape=(self.initial_param["helix_num"], helix_lens[0], 3)
         )
-        for i, node in enumerate(helix_nodes):
-            ca_mask = node.structure.atom_name == "CA"
-            ca_coord_obs[i] = node.structure[ca_mask].coord
+        for i, name in enumerate(helix_names):
+            seg = self.structure[self.mask[name]]
+            ca_mask = seg.atom_name == "CA"
+            ca_coord_obs[i] = seg[ca_mask].coord
 
         _log("Running staged CCCP bundle optimization")
         param, rmsd, ca_coord_fitted = fit_cc_by_cccp(

@@ -385,6 +385,56 @@ class TestSetType:
         assert tree.mask["bundle"].sum() == 14
 
 
+class TestCCCPCenterConvergence:
+    """CCCPHelixBundle.center() 在含子节点的束上应能收敛。
+
+    回归: fit() 必须读 ``self.structure`` + mask 而非子节点 structure。否则
+    ``center()`` 的 rotate/translate 只更新父 structure, 不更新子节点; 若 fit
+    读子节点, 每轮重 fit 都看到未变坐标, 返回同一帧 → 死循环 → TimeoutError。
+    """
+
+    @staticmethod
+    def _make_rotated_bundle():
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+        from scipy.spatial.transform import Rotation as R
+
+        base = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=12, centroid=[0, 0, 0],
+            y_prototype=[0, 1, 0], z=[0, 0, 1], backbone_type="CA",
+        )
+        S = base.structure
+        n = len(S) // 2
+        m1 = np.zeros(len(S), bool); m1[:n] = True
+        m2 = np.zeros(len(S), bool); m2[n:] = True
+        bundle = CCCPHelixBundle.from_atomarray(
+            structure=S, mask={"h1": m1, "h2": m2}
+        )
+        rot = R.from_euler("xyz", [40, -25, 60], degrees=True)
+        bundle.structure.coord = rot.apply(bundle.structure.coord) + np.array([30.0, -20.0, 10.0])
+        return bundle
+
+    def test_center_converges_on_rotated_bundle(self):
+        bundle = self._make_rotated_bundle()
+        bundle.center(max_try=60, atol_rot=1e-3, atol_trans=1e-3)
+        # 收敛后: 束质心回到原点, 束轴 (z) 对齐规范轴
+        np.testing.assert_allclose(np.asarray(bundle.centroid), [0, 0, 0], atol=1e-2)
+        np.testing.assert_allclose(np.asarray(bundle.xyz[2]), [0, 0, 1], atol=1e-2)
+
+    def test_fit_reflects_structure_rotation(self):
+        """fit() 读到的是被旋转过的 self.structure (而非未更新的子节点)。"""
+        from scipy.spatial.transform import Rotation as R
+
+        bundle = self._make_rotated_bundle()
+        before = bundle.xyz[2].copy()
+        # 把束绕 x 轴再转 90°, 重新 fit 后 z 轴应随之旋转 (不再等于原 z)
+        extra = R.from_euler("x", 90, degrees=True)
+        bundle.structure.coord = extra.apply(bundle.structure.coord)
+        bundle._xyz = None
+        bundle._centroid = None
+        bundle.fit()
+        assert not np.allclose(np.asarray(bundle.xyz[2]), before, atol=1e-2)
+
+
 class TestReplaceWith:
     """replace_with(): 用新块替换本节点, 重建本节点及以上所有祖先的 structure/mask。"""
 
