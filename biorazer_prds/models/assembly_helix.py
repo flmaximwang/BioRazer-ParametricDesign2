@@ -15,28 +15,15 @@ from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
 
 
 @dataclass
-class HelixProperty(AssemblyParaRef):
+class Helix(AssemblyParaRef):
     """单条螺旋 (叶节点; structure 即螺旋, 不再有 mask key)。"""
 
 
 @dataclass
-class HelixIO(HelixProperty):
-    pass
+class CrickHelix(Helix):
+    """单条 Crick 螺旋的 Assembly (叶节点, 继承 AssemblyParaRef)。
 
-
-@dataclass
-class HelixOperation(HelixProperty):
-    pass
-
-
-@dataclass
-class Helix(HelixIO, HelixOperation):
-    """一条纯螺旋的 Assembly (继承 AssemblyParaRef)。"""
-
-
-@dataclass
-class CrickHelixProperty(Helix):
-    """Params
+    Params
     ------
     direction: np.ndarray
         螺旋方向的归一化向量。
@@ -94,10 +81,6 @@ class CrickHelixProperty(Helix):
             else:
                 continue
 
-
-@dataclass
-class CrickHelixIO(CrickHelixProperty):
-
     @classmethod
     def from_param(
         cls,
@@ -137,10 +120,6 @@ class CrickHelixIO(CrickHelixProperty):
         helix.structure = structure
         helix.param = param
         return helix
-
-
-@dataclass
-class CrickHelixOperation(CrickHelixProperty):
 
     def fit(self, verbose: bool = False):
         """把观测 CA 坐标拟合成单条 Crick 螺旋模型。
@@ -230,16 +209,18 @@ class CrickHelixOperation(CrickHelixProperty):
 
 
 @dataclass
-class CrickHelix(CrickHelixIO, CrickHelixOperation):
-    """单条 Crick 螺旋的 Assembly (叶节点, 继承 AssemblyParaRef)。"""
+class CCCPHelixBundle(AssemblyParaRef):
+    """多螺旋 CCCP 束的 Assembly (继承 AssemblyParaRef)。
 
+    structure 为束结构 (仅含螺旋, 无连接区); 每条螺旋是一个子节点, 由基类
+    ``from_atomarray`` 按有序 mask 构建 (全覆盖不变式: 束内原子必须被所有
+    螺旋掩码完全覆盖, 因此束内不允许出现非螺旋的连接区)。螺旋按子节点顺序
+    识别, 与 key 名无关。
 
-@dataclass
-class CCCPHelixBundleProperty(AssemblyParaRef):
-    """多螺旋 CCCP 束的 Assembly。
-
-    structure 为束结构; 每条螺旋是一个子节点 (CrickHelix 叶), 由
-    ``from_atomarray`` 按有序 mask 构建。螺旋按子节点顺序识别, 与 key 名无关。
+    mask: dict[str, np.ndarray]
+        每条螺旋在束 structure 上的布尔掩码 (有序, 按顺序对应各螺旋)。
+    parts: dict[str, CCCPHelixBundle]
+        每条螺旋是一个叶子节点 (按顺序识别, 与 key 名无关)。
     """
 
     param: dict = field(
@@ -280,31 +261,11 @@ class CCCPHelixBundleProperty(AssemblyParaRef):
 
         sub-assembly 互不交集且恰好构成束, 因此按子节点顺序计数, 与 mask
         key 名无关。叶节点 (如 ``from_param`` 生成的束) 无子节点时回退到
-        ``param["helix_num"]``。
+        ``param[\"helix_num\"]``。
         """
         if self.parts:
             return len(self.parts)
         return self.param.get("helix_num")
-
-
-class CCCPHelixBundleIO(CCCPHelixBundleProperty):
-
-    @classmethod
-    def from_atomarray(cls, *, structure, ref_structure=None,
-                       mask: "str | dict" = "all") -> Self:
-        """构建多螺旋束: 每个 mask key 是一条螺旋, 子节点为 CrickHelix 叶。
-
-        ``mask="all"`` 退化为叶 (仅包裹结构)。否则 mask 为有序布尔掩码字典,
-        每条螺旋成为一个 CrickHelix 子节点; 螺旋按子节点顺序识别, 与 key 名
-        无关。
-        """
-        if mask == "all":
-            return cls(structure=structure, ref_structure=ref_structure)
-        res_obj = cls(structure=structure, ref_structure=ref_structure)
-        for key, m in mask.items():
-            res_obj.mask[key] = m  # 等长于 structure
-            res_obj.parts[key] = CrickHelix(structure=structure[m])  # 叶
-        return res_obj
 
     @classmethod
     def from_mask(cls, structure: bt_struct.AtomArray, mask: dict[str, np.ndarray]):
@@ -360,14 +321,10 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
         res_obj.structure = structure
         return res_obj
 
-
-@dataclass
-class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
-
     def fit(self, verbose: bool = False):
         """把多螺旋束拟合成 CCCP 参数化模型。
 
-        每条螺旋是一个 CrickHelix 叶子节点, 其 structure 即该螺旋。
+        每条螺旋是一个叶子节点, 其 structure 即该螺旋。
         """
         def _log(message: str):
             if verbose:
@@ -441,14 +398,3 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         )
         self._centroid = self.param["centroid"]
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
-
-
-@dataclass
-class CCCPHelixBundle(CCCPHelixBundleIO, CCCPHelixBundleOperation):
-    """多螺旋 CCCP 束的 Assembly (继承 AssemblyParaRef)。
-
-    mask: dict[str, np.ndarray]
-        每条螺旋在束 structure 上的布尔掩码 (有序, 按顺序对应各螺旋)。
-    parts: dict[str, CrickHelix]
-        每条螺旋是一个 CrickHelix 叶子节点 (按顺序识别, 与 key 名无关)。
-    """
