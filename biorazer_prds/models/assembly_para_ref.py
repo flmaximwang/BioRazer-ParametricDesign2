@@ -38,7 +38,7 @@ class AssemblyParaRef(Assembly):
     rmsd: float = None
 
     @classmethod
-    def from_params(cls, *, params: dict, **kwargs):
+    def from_param(cls, *, params: dict, **kwargs):
         """从给定参数加载结构; 其余属性根据参数自动生成。"""
         raise NotImplementedError("from_params method is not implemented")
 
