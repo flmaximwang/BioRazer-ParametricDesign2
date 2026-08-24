@@ -32,8 +32,8 @@ from biorazer.structure.io.protein import (
     AtomArray_Pdb,
     AtomArray_Cif,
 )
-from biorazer_parametric_design.models.helix import CCCPHelixBundle
-from biorazer_parametric_design.params.basic import FitError
+from biorazer_prds.models.helix import CCCPHelixBundle
+from biorazer_prds.params.basic import FitError
 
 PDB_SUFFIXES = (".pdb", ".ent")
 CIF_SUFFIXES = (".cif", ".mmcif")

@@ -11,7 +11,7 @@ authors = [
 version = "0.3.0"
 readme = "README.md"
 packages = [
-    { include = "biorazer_parametric_design" }
+    { include = "biorazer_prds" }
 ]
 
 [tool.poetry.dependencies]
