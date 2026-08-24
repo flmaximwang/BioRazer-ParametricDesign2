@@ -790,6 +790,73 @@ class TestAddAtoms:
             parent2.add_atoms(_atoms(1, 100, "A"), {"x": np.array([True])})
 
 
+class TestRemoveAtoms:
+    """remove_atoms: 按单个 mask 移除原子, 同步更新 structure/mask, 删除空 part。"""
+
+    @staticmethod
+    def _make_internal():
+        parent = Assembly()
+        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
+        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
+        parent.merge_up()
+        return parent
+
+    def test_remove_from_one_part(self):
+        parent = self._make_internal()
+        rm = np.zeros(5, bool); rm[1] = True  # 原子 1 属于 part a
+        parent.remove_atoms(rm)
+        assert len(parent.structure) == 4
+        assert len(parent.parts["a"].structure) == 2  # 保留原子 0,2
+        assert len(parent.parts["b"].structure) == 2
+        np.testing.assert_array_equal(
+            _coords(parent.parts["a"].structure), [[0, 0, 0], [2, 0, 0]]
+        )
+        # mask 重建为连续区间, push_down 往返一致
+        assert parent.mask["a"].sum() == 2
+        parent.push_down()
+        assert len(parent.parts["a"].structure) == 2
+
+    def test_remove_across_parts(self):
+        parent = self._make_internal()
+        rm = np.zeros(5, bool); rm[[2, 3]] = True  # 原子2 在 a, 原子3 在 b
+        parent.remove_atoms(rm)
+        assert len(parent.structure) == 3
+        assert len(parent.parts["a"].structure) == 2
+        assert len(parent.parts["b"].structure) == 1
+
+    def test_remove_drops_empty_part(self):
+        parent = self._make_internal()
+        rm = np.zeros(5, bool); rm[:3] = True  # part a 全删
+        parent.remove_atoms(rm)
+        assert "a" not in parent.parts
+        assert "b" in parent.parts
+        assert len(parent.structure) == 2
+
+    def test_remove_into_internal_child(self):
+        inner = Assembly()
+        inner.append_part("x1", Assembly(structure=_atoms(2, 0, "A")))
+        inner.merge_up()
+        parent = Assembly()
+        parent.append_part("x", inner)
+        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
+        parent.merge_up()
+        rm = np.zeros(4, bool); rm[0] = True  # 原子 0 属于 x/x1
+        parent.remove_atoms(rm)
+        assert len(parent.parts["x"].parts["x1"].structure) == 1
+        assert len(parent.structure) == 3
+
+    def test_leaf_slices_structure(self):
+        leaf = Assembly(structure=_atoms(3, 0, "A"))
+        leaf.remove_atoms(np.array([True, False, False]))
+        assert len(leaf.structure) == 2
+        np.testing.assert_array_equal(_coords(leaf.structure), [[1, 0, 0], [2, 0, 0]])
+
+    def test_validation(self):
+        parent = self._make_internal()
+        with pytest.raises(ValueError, match="长度"):
+            parent.remove_atoms(np.array([True]))
+
+
 class TestReplaceWith:
     """replace_with(): 用新块替换本节点, 重建本节点及以上所有祖先的 structure/mask。"""
 

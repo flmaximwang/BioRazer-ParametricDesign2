@@ -192,9 +192,51 @@ class Assembly:
         self._recompute_from_children()
         return self
 
-    # ------------------------------------------------------------------
-    # 子节点管理
-    # ------------------------------------------------------------------
+    def remove_atoms(self, mask):
+        """从本节点移除原子, 同步更新 structure 与各子节点的 mask。
+
+        输入为单个布尔数组 (长度 = 本节点原子数), True 表示要移除的原子。
+        每个子节点保留其原 mask 与 ``~mask`` 的交集部分; 若某子节点的原子被
+        全部移除, 该子节点 (part) 一并删除。随后按 ``merge_up`` 的拼接不变式
+        重建 structure 与 mask。若本节点是叶节点 (无子节点), 仅切片 structure。
+
+        Parameters
+        ----------
+        mask : np.ndarray
+            等长于 ``self.structure`` 的布尔数组, True = 移除该原子。
+
+        Returns
+        -------
+        self
+        """
+        mask = np.asarray(mask, dtype=bool)
+        if mask.ndim != 1 or len(mask) != len(self.structure):
+            raise ValueError(
+                f"remove_atoms 的 mask 长度须等于 structure 原子数 "
+                f"({len(self.structure)}), 得到 {mask.size}"
+            )
+        keep = ~mask
+        if not self.parts:
+            self.structure = self.structure[keep]
+            return self
+        # 确保每个子节点都有有效 mask (拼接不变式)
+        if set(self.mask) != set(self.parts):
+            self._recompute_from_children()
+        new_parts = {}
+        for name, child in self.parts.items():
+            child_keep = keep[self.mask[name]]
+            if not child_keep.any():
+                continue  # 该子节点原子被全部移除 → 删除 part
+            if child.parts:
+                child.remove_atoms(~child_keep)
+                if not child.parts:
+                    continue  # 递归移除后子节点变空
+            else:
+                child.structure = child.structure[child_keep]
+            new_parts[name] = child
+        self.parts = new_parts
+        self._recompute_from_children()
+        return self
 
     def append_part(self, name, part):
         """追加一个子 Assembly。子节点顺序即 ``merge_up`` 的拼接顺序。"""
