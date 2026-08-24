@@ -92,6 +92,25 @@ class Assembly:
             self.mask[name] = mask
             offset += n
 
+    def split(self, mask: dict):
+        """把一个尚无子节点的节点按 mask 拆分成子树 (叶 → 内部节点)。
+
+        与 ``from_atomarray`` 的 mask 语义一致: mask 的每个值要么是等长于
+        本节点 ``structure`` 的布尔数组, 要么是嵌套 dict (子树); 构建出的
+        每个子节点所存 mask 会被投影到其自身 structure 上 (长度 ≠ 输入)。
+
+        Parameters
+        ----------
+        mask : dict
+            拆分用的掩码字典 (等长于本节点 structure)。
+        """
+        if self.parts:
+            raise ValueError(
+                f"该节点已有子节点 ({list(self.parts)}), 不能重复拆分。"
+            )
+        self._build_subtree(mask, np.arange(len(self.structure)))
+        return self
+
     # ------------------------------------------------------------------
     # 子节点管理
     # ------------------------------------------------------------------

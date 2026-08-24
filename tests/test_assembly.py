@@ -299,3 +299,47 @@ class TestFromAtomArray:
         rs = _atoms(3, 50, "R")
         r = Assembly.from_atomarray(structure=_atoms(4, 0, "A"), ref_structure=rs)
         assert r.ref_structure is rs
+
+
+class TestSplit:
+    """split(): 把已构造的叶节点继续拆分为子树。"""
+
+    def test_split_leaf_into_children(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(5, 0, "A"))
+        assert leaf.parts == {} and leaf.mask == {}
+        m1 = np.array([True, True, True, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True], dtype=bool)
+        leaf.split({"a": m1, "b": m2})
+        assert set(leaf.parts) == {"a", "b"}
+        assert len(leaf.parts["a"].structure) == 3
+        assert len(leaf.parts["b"].structure) == 2
+        assert leaf.mask["a"].sum() == 3 and len(leaf.mask["a"]) == 5
+
+    def test_split_nested_projection(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(6, 0, "A"))
+        m11 = np.array([True, True, False, False, False, False], dtype=bool)
+        m12 = np.array([False, False, True, False, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True, True], dtype=bool)
+        leaf.split({"grp": {"x": m11, "y": m12}, "b": m2})
+        assert len(leaf.parts["grp"].structure) == 3
+        assert len(leaf.parts["grp"].parts["x"].structure) == 2
+        # 子节点 mask 被投影到其自身 structure 上 (长度 ≠ 输入)
+        assert len(leaf.parts["grp"].mask["x"]) == 3
+
+    def test_split_then_merge_push_round_trip(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(6, 0, "A"))
+        m11 = np.array([True, True, False, False, False, False], dtype=bool)
+        m12 = np.array([False, False, True, False, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True, True], dtype=bool)
+        leaf.split({"grp": {"x": m11, "y": m12}, "b": m2})
+        leaf.merge_up()
+        assert len(leaf.structure) == 6
+        leaf.push_down()
+        assert len(leaf.parts["grp"].parts["x"].structure) == 2
+
+    def test_split_twice_raises(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(4, 0, "A"))
+        m = {f"x": np.array([True] * 4, dtype=bool)}
+        leaf.split(m)
+        with pytest.raises(ValueError, match="已有子节点"):
+            leaf.split({"y": np.array([True] * 4, dtype=bool)})
