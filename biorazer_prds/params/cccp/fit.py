@@ -26,7 +26,7 @@ def _residuals_for_fit_cc_by_cccp(params, ca_coords_obs, parse_dict, **kwargs):
     param_kwargs = {}
     for key, value in parse_dict.items():
         param_kwargs[key] = params[value]
-    pred_ca, _ = generate_cc_ca_by_cccp(**param_kwargs, **kwargs)
+    pred_ca, _, _ = generate_cc_ca_by_cccp(**param_kwargs, **kwargs)
     return (pred_ca - ca_coords_obs).flatten()
 
 
@@ -49,7 +49,7 @@ def _scalar_for_fit_cc_by_cccp(params, ca_coords_obs: np.ndarray, parse_dict, **
     param_kwargs = {}
     for key, value in parse_dict.items():
         param_kwargs[key] = params[value]
-    pred_ca, _ = generate_cc_ca_by_cccp(**param_kwargs, **kwargs)
+    pred_ca, _, _ = generate_cc_ca_by_cccp(**param_kwargs, **kwargs)
     residuals = pred_ca - ca_coords_obs
     residuals = residuals.reshape((residuals.shape[0] * residuals.shape[1], 3))
     rmsd = np.sqrt(np.sum(residuals**2) / residuals.shape[0])
@@ -458,9 +458,11 @@ def fit_cc_by_cccp(
             ),
         )
 
-    # Final RMSD computed from objective residual vector.
-    rmsd = np.sqrt(np.sum(result.fun**2) / (helix_num * residue_num))
+    # ``result.fun`` is already the RMSD of the final parameters (returned by
+    # ``_scalar_for_fit_cc_by_cccp``), so report it directly instead of
+    # re-normalizing by residue count.
+    rmsd = result.fun
     # Regenerate coordinates and normalized parameter dictionary from final fit.
-    xyz, params = generate_cc_ca_by_cccp(**stage_params)
+    xyz, params, _ = generate_cc_ca_by_cccp(**stage_params)
     _log(f"Fit completed with RMSD={rmsd:.4f}")
     return params, rmsd, xyz

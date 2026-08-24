@@ -341,7 +341,7 @@ class CCCPHelixBundle(AssemblyParaRef):
         """按参数生成束结构 (CA/Gly 主链); 不构建子节点 (mask 未提供)。"""
         res_obj = cls()
         res_obj.param["helix_num"] = helix_num
-        xyz, param = generate_cc_ca_by_cccp(
+        xyz, param, _ = generate_cc_ca_by_cccp(
             helix_num=helix_num,
             residue_num=residue_num,
             senses=senses,
@@ -401,13 +401,18 @@ class CCCPHelixBundle(AssemblyParaRef):
         ca_coord_obs = np.zeros(
             shape=(self.initial_param["helix_num"], helix_lens[0], 3)
         )
+        # 每条螺旋的 CA 原子 (helix-major 顺序), 供生成 ref_structure 时复制
+        # 链/残基属性, 使输出保留原始 chain_id / res_id 标注。
+        helix_ca_list = []
         for i, name in enumerate(helix_names):
             seg = self.structure[self.mask[name]]
             ca_mask = seg.atom_name == "CA"
             ca_coord_obs[i] = seg[ca_mask].coord
+            helix_ca_list.append(seg[ca_mask])
+        ref_ca = bt_struct.concatenate(helix_ca_list)
 
         _log("Running staged CCCP bundle optimization")
-        param, rmsd, ca_coord_fitted = fit_cc_by_cccp(
+        param, rmsd, _ = fit_cc_by_cccp(
             ca_coord_obs,
             params_not_to_fit=self.params_not_to_fit,
             verbose=verbose,
@@ -427,24 +432,10 @@ class CCCPHelixBundle(AssemblyParaRef):
         self.extra_param["z"] = z
 
         self.rmsd = rmsd
-        ca_coord_fitted = np.reshape(
-            ca_coord_fitted,
-            shape=(ca_coord_fitted.shape[0] * ca_coord_fitted.shape[1], 3),
-        )
-        array_length = ca_coord_fitted.shape[0]
-
-        fitted_structure = bt_struct.AtomArray(length=array_length)
-        fitted_structure.res_name = np.array(["GLY"] * array_length)
-        fitted_structure.element = np.array(["C"] * array_length)
-        fitted_structure.atom_name = np.array(["CA"] * array_length)
-        fitted_structure.chain_id = np.array(
-            [chr(ord("A") + i // helix_lens[0]) for i in range(array_length)]
-        )
-        fitted_structure.res_id = np.array(
-            list(range(1, helix_lens[0] + 1)) * self.helix_num
-        )
-        fitted_structure.coord = ca_coord_fitted
-        self.ref_structure = fitted_structure
+        # 用拟合参数重新生成 CA, 并从观测 CA (ref_ca) 复制链/残基属性,
+        # 使 ref_structure 保留原始 chain_id / res_id 标注。
+        _, _, atom_array = generate_cc_ca_by_cccp(**param, ref_structure=ref_ca)
+        self.ref_structure = atom_array
 
         self._xyz = np.vstack(
             (self.extra_param["x"], self.extra_param["y"], self.extra_param["z"])
@@ -560,7 +551,7 @@ class CCCPHelixBundle(AssemblyParaRef):
         # residue_t 关于 0.5 中心对称: 以 N+2n 重新生成后, 原 N 个残基仍居中,
         # 取新轨迹最前/最后 n 个即为该螺旋末端的理想超螺旋延伸。
         kwargs = {**self.param, "residue_num": residue_num + 2 * n}
-        coords, _ = generate_cc_ca_by_cccp(**kwargs)
+        coords, _, _ = generate_cc_ca_by_cccp(**kwargs)
         new_ca = coords[helix_index][:n] if terminus == "N" else coords[helix_index][-n:]
         new_structure = ca_xyz_to_atom_array(
             new_ca,

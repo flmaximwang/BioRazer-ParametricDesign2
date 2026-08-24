@@ -153,7 +153,7 @@ def _fit_sym_cc_by_crick_residual(params, ca_coords_obs, parse_dict, **kwargs):
     params_kwargs = {}
     for key, value in parse_dict.items():
         params_kwargs[key] = params[value]
-    xyz_pred, _ = generate_cc_ca_by_cccp(
+    xyz_pred, _, _ = generate_cc_ca_by_cccp(
         **params_kwargs,
         **kwargs,
     )
@@ -364,5 +364,5 @@ def fit_sym_cc_by_crick(
     )
 
     rmsd = np.sqrt(np.sum(result.fun**2) / (helix_num * residue_num))
-    xyz, params = generate_cc_ca_by_cccp(**stage_params)
+    xyz, params, _ = generate_cc_ca_by_cccp(**stage_params)
     return params, rmsd, xyz

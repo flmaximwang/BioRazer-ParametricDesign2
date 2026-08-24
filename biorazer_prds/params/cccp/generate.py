@@ -2,6 +2,7 @@ import numpy as np
 from typing import Iterable
 from numbers import Number
 from scipy.spatial.transform import Rotation as R
+import biotite.structure as bt_struct
 from .geometry import crick_eq
 
 
@@ -21,6 +22,7 @@ def generate_cc_ca_by_cccp(
     phi1s: Iterable[float] | float = np.pi / 20,  # Phase shift of each helix
     pitch_angles: Iterable[float] | float = -0.2096,  # Pitch angle of each helix
     z_offsets: Iterable[float] | float = 0.0,  # Z-offsets for each helix
+    ref_structure: bt_struct.AtomArray = None,
 ):
     """
     Generate a coiled-coil helix structure based on the Coiled-Coil Crick model.
@@ -160,4 +162,34 @@ def generate_cc_ca_by_cccp(
         z_offsets=z_offsets,
     )
 
-    return coords, params
+    # Build an AtomArray of the generated CA atoms. When ``ref_structure`` is
+    # given, copy each residue's CA attributes (chain_id / res_id / res_name)
+    # from it, so the output keeps the original chain/residue labeling.
+    # ``ref_structure`` must contain exactly ``helix_num * residue_num`` CA
+    # atoms in helix-major order (each helix's CA in residue order).
+    # When ``ref_structure`` is None, fall back to the original labeling mode
+    # (chains A, B, C, ... by helix index, res_id 1..residue_num per helix).
+    atom_array = bt_struct.AtomArray(length=helix_num * residue_num)
+    atom_array.atom_name = np.array(["CA"] * (helix_num * residue_num))
+    atom_array.element = np.array(["C"] * (helix_num * residue_num))
+    atom_array.coord = coords.reshape(-1, 3)
+    if ref_structure is None:
+        atom_array.chain_id = np.array(
+            [chr(ord("A") + i // residue_num) for i in range(helix_num * residue_num)]
+        )
+        atom_array.res_id = np.array(
+            list(range(1, residue_num + 1)) * helix_num
+        )
+        atom_array.res_name = np.array(["GLY"] * (helix_num * residue_num))
+    else:
+        if len(ref_structure) != helix_num * residue_num:
+            raise ValueError(
+                "ref_structure must contain helix_num * residue_num "
+                f"({helix_num * residue_num}) CA atoms in helix-major order, "
+                f"got {len(ref_structure)}"
+            )
+        atom_array.chain_id = np.array(ref_structure.chain_id)
+        atom_array.res_id = np.array(ref_structure.res_id)
+        atom_array.res_name = np.array(ref_structure.res_name)
+
+    return coords, params, atom_array
