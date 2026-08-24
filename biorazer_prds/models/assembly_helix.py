@@ -1,4 +1,3 @@
-import re
 from typing import Iterable, Self
 from dataclasses import dataclass, field
 
@@ -240,7 +239,7 @@ class CCCPHelixBundleProperty(AssemblyParaRef):
     """多螺旋 CCCP 束的 Assembly。
 
     structure 为束结构; 每条螺旋是一个子节点 (CrickHelix 叶), 由
-    ``from_atomarray`` 按 mask 构建。mask key 为 ``helix_<i>``。
+    ``from_atomarray`` 按有序 mask 构建。螺旋按子节点顺序识别, 与 key 名无关。
     """
 
     param: dict = field(
@@ -277,50 +276,31 @@ class CCCPHelixBundleProperty(AssemblyParaRef):
 
     @property
     def helix_num(self):
-        if "helix_num" in self.param and self.param["helix_num"] is not None:
-            pass
-        else:
-            counter = 0
-            for key in self.mask:
-                if re.match(r"helix_\d+", key):
-                    counter += 1
-            self.param["helix_num"] = counter
-        return self.param["helix_num"]
+        """螺旋条数 = 有序子节点数。
 
-    @helix_num.setter
-    def helix_num(self, value):
-        self.param["helix_num"] = value
+        sub-assembly 互不交集且恰好构成束, 因此按子节点顺序计数, 与 mask
+        key 名无关。叶节点 (如 ``from_param`` 生成的束) 无子节点时回退到
+        ``param["helix_num"]``。
+        """
+        if self.parts:
+            return len(self.parts)
+        return self.param.get("helix_num")
 
 
 class CCCPHelixBundleIO(CCCPHelixBundleProperty):
-
-    @staticmethod
-    def _validate_helix_keys(mask: dict[str, np.ndarray]):
-        helix_keys = [key for key in mask if re.match(r"helix_\d+", key)]
-        if not helix_keys:
-            raise ValueError(
-                "No valid helix keys found in mask. Expected keys like 'helix_1', 'helix_2', etc."
-            )
-        helix_nums = sorted([int(key.split("_")[1]) for key in helix_keys])
-        if helix_nums != list(range(1, max(helix_nums) + 1)):
-            raise ValueError(
-                f"Helix keys must be consecutive and start from 1. Found helix numbers: {helix_nums}"
-            )
-        return len(helix_keys)
 
     @classmethod
     def from_atomarray(cls, *, structure, ref_structure=None,
                        mask: "str | dict" = "all") -> Self:
         """构建多螺旋束: 每个 mask key 是一条螺旋, 子节点为 CrickHelix 叶。
 
-        ``mask="all"`` 退化为叶 (仅包裹结构)。否则要求 mask 为 ``helix_<i>``
-        布尔掩码字典, 每条螺旋成为一个 CrickHelix 子节点。
+        ``mask="all"`` 退化为叶 (仅包裹结构)。否则 mask 为有序布尔掩码字典,
+        每条螺旋成为一个 CrickHelix 子节点; 螺旋按子节点顺序识别, 与 key 名
+        无关。
         """
         if mask == "all":
             return cls(structure=structure, ref_structure=ref_structure)
-        helix_num = cls._validate_helix_keys(mask)
         res_obj = cls(structure=structure, ref_structure=ref_structure)
-        res_obj.helix_num = helix_num
         for key, m in mask.items():
             res_obj.mask[key] = m  # 等长于 structure
             res_obj.parts[key] = CrickHelix(structure=structure[m])  # 叶
@@ -394,11 +374,10 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
                 print(f"[CCCPHelixBundle.fit] {message}")
 
         _log(f"Validating CA lengths for {self.helix_num} helices")
-        helix_lens = []
-        for i in range(self.helix_num):
-            key = f"helix_{i+1}"
-            helix = self[key].structure
-            helix_lens.append(np.sum(helix.atom_name == "CA"))
+        helix_nodes = list(self.parts.values())
+        helix_lens = [
+            np.sum(node.structure.atom_name == "CA") for node in helix_nodes
+        ]
 
         assert (
             len(set(helix_lens)) == 1
@@ -413,13 +392,9 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         ca_coord_obs = np.zeros(
             shape=(self.initial_param["helix_num"], helix_lens[0], 3)
         )
-        for i in range(self.initial_param["helix_num"]):
-            key = f"helix_{i+1}"
-            helix = self[key].structure
-            ca_mask = helix.atom_name == "CA"
-            ca_atoms = helix[ca_mask]
-            ca_coord_obs[i] = ca_atoms.coord
-            self[key].structure = helix
+        for i, node in enumerate(helix_nodes):
+            ca_mask = node.structure.atom_name == "CA"
+            ca_coord_obs[i] = node.structure[ca_mask].coord
 
         _log("Running staged CCCP bundle optimization")
         param, rmsd, ca_coord_fitted = fit_cc_by_cccp(
@@ -473,7 +448,7 @@ class CCCPHelixBundle(CCCPHelixBundleIO, CCCPHelixBundleOperation):
     """多螺旋 CCCP 束的 Assembly (继承 AssemblyParaRef)。
 
     mask: dict[str, np.ndarray]
-        每条螺旋在束 structure 上的布尔掩码 (key: ``helix_<i>``)。
+        每条螺旋在束 structure 上的布尔掩码 (有序, 按顺序对应各螺旋)。
     parts: dict[str, CrickHelix]
-        每条螺旋是一个 CrickHelix 叶子节点。
+        每条螺旋是一个 CrickHelix 叶子节点 (按顺序识别, 与 key 名无关)。
     """
