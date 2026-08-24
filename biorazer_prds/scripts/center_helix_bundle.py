@@ -220,7 +220,7 @@ def main(argv=None):
     for key, spec in zip(masks, specs):
         print(f"  {key}: {spec}  ({masks[key].sum()} 原子)")
 
-    bundle = CCCPHelixBundle.from_structure(structure=structure, mask=masks)
+    bundle = CCCPHelixBundle.from_atomarray(structure=structure, mask=masks)
     try:
         bundle.center(
             max_try=args.max_try,

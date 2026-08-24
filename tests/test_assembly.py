@@ -231,3 +231,71 @@ class TestStaticBetween:
         np.testing.assert_allclose(
             R.from_quat(q).as_euler("xyz"), e, atol=1e-6
         )
+
+
+class TestFromAtomArray:
+    """Assembly.from_atomarray: mask='all' 为叶; mask=dict 构建树 (含嵌套投影)。"""
+
+    def test_leaf_default(self):
+        leaf = Assembly.from_atomarray(structure=_atoms(4, 0, "A"))
+        assert leaf.parts == {}
+        assert leaf.mask == {}
+        assert len(leaf.structure) == 4
+
+    def test_flat_tree(self):
+        m1 = np.array([True, True, True, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True], dtype=bool)
+        root = Assembly.from_atomarray(
+            structure=_atoms(5, 0, "A"), mask={"a": m1, "b": m2}
+        )
+        assert set(root.parts) == {"a", "b"}
+        assert len(root.parts["a"].structure) == 3
+        assert len(root.parts["b"].structure) == 2
+        # 根 mask 与输入等长 (指向顶层结构)
+        assert len(root.mask["a"]) == 5 and root.mask["a"].sum() == 3
+        # 子节点是叶 (mask='all' => 无 parts / 空 mask)
+        assert root.parts["a"].parts == {}
+        assert root.parts["a"].mask == {}
+
+    def test_nested_projection(self):
+        # 输入所有 mask 等长于顶层 structure; dict 嵌套即树拓扑
+        m11 = np.array([True, True, False, False, False, False], dtype=bool)   # 2
+        m12 = np.array([False, False, True, False, False, False], dtype=bool)  # 1
+        m2 = np.array([False, False, False, True, True, True], dtype=bool)     # 3
+        nested = Assembly.from_atomarray(
+            structure=_atoms(6, 0, "A"),
+            mask={"grp": {"x": m11, "y": m12}, "b": m2},
+        )
+        assert set(nested.parts) == {"grp", "b"}
+        assert set(nested.parts["grp"].parts) == {"x", "y"}
+        assert len(nested.parts["grp"].structure) == 3  # x(2)+y(1)
+        assert len(nested.parts["grp"].parts["x"].structure) == 2
+        assert len(nested.parts["b"].structure) == 3
+        # grp 在顶层结构上的掩码 = x|y (等长 6)
+        assert len(nested.mask["grp"]) == 6 and nested.mask["grp"].sum() == 3
+        # x 在 grp structure 上的掩码被投影为长度 3 (≠ 输入长度 6)
+        xm = nested.parts["grp"].mask["x"]
+        assert len(xm) == 3 and xm.sum() == 2
+        np.testing.assert_array_equal(xm, [True, True, False])
+
+    def test_nested_merge_push_round_trip(self):
+        m11 = np.array([True, True, False, False, False, False], dtype=bool)
+        m12 = np.array([False, False, True, False, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True, True], dtype=bool)
+        nested = Assembly.from_atomarray(
+            structure=_atoms(6, 0, "A"),
+            mask={"grp": {"x": m11, "y": m12}, "b": m2},
+        )
+        nested.merge_up()
+        assert len(nested.structure) == 6
+        assert len(nested.parts["grp"].structure) == 3
+        # 每层 mask 与各自父 structure 同长
+        assert len(nested.mask["grp"]) == 6
+        assert len(nested.parts["grp"].mask["x"]) == 3
+        nested.push_down()
+        assert len(nested.parts["grp"].parts["x"].structure) == 2
+
+    def test_ref_structure(self):
+        rs = _atoms(3, 50, "R")
+        r = Assembly.from_atomarray(structure=_atoms(4, 0, "A"), ref_structure=rs)
+        assert r.ref_structure is rs

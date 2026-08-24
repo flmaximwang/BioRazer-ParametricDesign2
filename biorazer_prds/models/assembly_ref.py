@@ -17,19 +17,14 @@ from .assembly import Assembly
 
 @dataclass
 class AssemblyRef(Assembly):
-    """参考 Assembly: 在真实 ``structure`` 之外再携带 ``ref_structure``。
+    """参考 Assembly: 在真实 ``structure`` 之外携带 ``ref_structure`` (继承自基类)。
 
     ``ref_structure`` 是用于放置/拟合的参考几何, 其内容由子类决定:
     - AssemblyParaRef : ref_structure 虚拟 (由参数生成, 理想轨迹)
     - AssemblyRealRef : ref_structure 真实 (加载, 如 RCSB HEM)
+
+    构建统一走基类的 ``Assembly.from_atomarray(structure, ref_structure=..., mask=...)``。
     """
-
-    ref_structure: bt_struct.AtomArray = None
-
-    @classmethod
-    def from_structure(cls, *, structure: bt_struct.AtomArray):
-        """从真实结构构建一个参考 Assembly。"""
-        return cls(structure=structure)
 
     def to_pymol_axes(self, prefix="default", length=5.0):
         """把该 Assembly 的 x/y/z 局部轴导出为 PyMOL 可视化命令。"""

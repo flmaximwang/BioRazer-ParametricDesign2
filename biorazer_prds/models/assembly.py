@@ -43,6 +43,7 @@ class Assembly:
     """
 
     structure: bt_struct.AtomArray = None
+    ref_structure: bt_struct.AtomArray = None
     parts: dict[str, "Assembly"] = field(default_factory=dict)
     mask: dict[str, np.ndarray] = field(default_factory=dict)
 
@@ -326,9 +327,66 @@ class Assembly:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_structure(cls, *, structure: bt_struct.AtomArray):
-        """从真实结构构建一个叶 Assembly。"""
-        return cls(structure=structure)
+    def from_atomarray(cls, *, structure: bt_struct.AtomArray,
+                       ref_structure: bt_struct.AtomArray = None,
+                       mask: "str | dict" = "all"):
+        """从 AtomArray 构建 Assembly。
+
+        Parameters
+        ----------
+        structure : bt_struct.AtomArray
+            真实原子结构 (必填)。
+        ref_structure : bt_struct.AtomArray, optional
+            参考结构 (参考 Assembly 携带)。
+        mask : "all" | dict
+            - ``"all"`` (默认): 该节点是叶节点, 直接包裹 ``structure``, 不构建子节点。
+            - ``dict``: 按 mask 的结构构建树。mask 的每个值要么是布尔数组
+              (等长于顶层 ``structure``, 指向顶层原子), 要么是嵌套 dict (子树)。
+              子节点的 mask 会被投影到该子节点自身的 structure 上, 因此
+              **长度不一定等于输入的 mask** (见核心不变式)。
+
+        Notes
+        -----
+        输入 ``mask`` 中所有布尔数组都等长于顶层 ``structure``; dict 的嵌套
+        即树的拓扑。构建出的每个节点所存 ``mask`` 是其自身 structure 上的
+        掩码 (长度 = 该节点原子数)。
+        """
+        obj = cls(structure=structure, ref_structure=ref_structure)
+        if mask != "all":
+            indices = np.arange(len(structure))
+            obj._build_subtree(mask, indices)
+        return obj
+
+    def _build_subtree(self, mask: dict, indices: np.ndarray):
+        """按 mask 字典递归构建子树。
+
+        Parameters
+        ----------
+        mask : dict
+            name -> 顶层布尔数组 或 嵌套 dict (子树)。
+        indices : np.ndarray
+            本节点原子对应的顶层结构索引 (用于把顶层掩码投影到本节点)。
+        """
+        for name, m in mask.items():
+            if isinstance(m, dict):
+                # 子树: 先取该子树全部叶子掩码在本节点上的并集, 作为本节点对
+                # 该子树的掩码; 再递归构建子树 (索引投影到子树原子的顶层位置)。
+                union = np.zeros(len(indices), dtype=bool)
+                for sub in m.values():
+                    union |= sub[indices]
+                self.mask[name] = union
+                child = type(self)(
+                    structure=self.structure[union], ref_structure=self.ref_structure
+                )
+                self.parts[name] = child
+                child._build_subtree(m, indices[union])
+            else:
+                # 叶: m 是等长于顶层 structure 的掩码, 投影到本节点即为其子掩码。
+                local = m[indices]
+                self.mask[name] = local
+                self.parts[name] = type(self)(
+                    structure=self.structure[local], ref_structure=self.ref_structure
+                )
 
     def to_pdb(self, pdb_file):
         """导出结构到 PDB 文件。"""

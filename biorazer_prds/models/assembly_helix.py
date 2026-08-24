@@ -17,7 +17,7 @@ from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
 
 @dataclass
 class HelixProperty(AssemblyParaRef):
-    mask: dict[str, np.ndarray] = field(default_factory=lambda: {"helix": None})
+    """单条螺旋 (叶节点; structure 即螺旋, 不再有 mask key)。"""
 
 
 @dataclass
@@ -99,21 +99,6 @@ class CrickHelixProperty(Helix):
 @dataclass
 class CrickHelixIO(CrickHelixProperty):
 
-    @staticmethod
-    def _validate_helix_mask(mask: dict[str, np.ndarray]):
-        if "helix" not in mask:
-            raise ValueError("Mask must contain a key 'helix' for CrickHelix.")
-        if mask["helix"] is None:
-            raise ValueError("Mask for 'helix' cannot be None.")
-        return True
-
-    @classmethod
-    def from_structure(cls, *, structure, mask: dict[str, np.ndarray]):
-        res_obj = super().from_structure(structure=structure)
-        cls._validate_helix_mask(mask)
-        res_obj.mask = mask
-        return res_obj
-
     @classmethod
     def from_param(
         cls,
@@ -159,13 +144,16 @@ class CrickHelixIO(CrickHelixProperty):
 class CrickHelixOperation(CrickHelixProperty):
 
     def fit(self, verbose: bool = False):
-        """把观测 CA 坐标拟合成单条 Crick 螺旋模型。"""
+        """把观测 CA 坐标拟合成单条 Crick 螺旋模型。
+
+        叶节点: structure 即整条螺旋, 直接用其 CA 原子拟合。
+        """
         def _log(message: str):
             if verbose:
                 print(f"[CrickHelix.fit] {message}")
 
-        _log("Preparing CA coordinates from helix mask")
-        atom_array = self.atoms("helix")
+        _log("Preparing CA coordinates from helix structure")
+        atom_array = self.structure
         ca_mask = atom_array.atom_name == "CA"
         ca_atoms = atom_array[ca_mask]
         ca_coord = ca_atoms.coord
@@ -244,18 +232,17 @@ class CrickHelixOperation(CrickHelixProperty):
 
 @dataclass
 class CrickHelix(CrickHelixIO, CrickHelixOperation):
-    """单条 Crick 螺旋的 Assembly (继承 AssemblyParaRef)。"""
+    """单条 Crick 螺旋的 Assembly (叶节点, 继承 AssemblyParaRef)。"""
 
 
 @dataclass
 class CCCPHelixBundleProperty(AssemblyParaRef):
+    """多螺旋 CCCP 束的 Assembly。
 
-    mask: dict[str, np.ndarray] = field(
-        default_factory=lambda: {f"helix_{i+1}": None for i in range(2)}
-    )
-    parts: dict[str, CrickHelix] = field(
-        default_factory=lambda: {f"helix_{i+1}": CrickHelix() for i in range(2)}
-    )
+    structure 为束结构; 每条螺旋是一个子节点 (CrickHelix 叶), 由
+    ``from_atomarray`` 按 mask 构建。mask key 为 ``helix_<i>``。
+    """
+
     param: dict = field(
         default_factory=lambda: {
             "helix_num": None,
@@ -275,17 +262,6 @@ class CCCPHelixBundleProperty(AssemblyParaRef):
             "z_offsets": None,
         }
     )
-
-    def push_down(self):
-        """自顶向下: 按 mask 把每条螺旋切成独立的 CrickHelix 子节点。"""
-        for i in range(self.helix_num):
-            key = f"helix_{i+1}"
-            n = int(np.sum(self.mask[key]))
-            self.parts[key] = CrickHelix(
-                structure=self.structure[self.mask[key]],
-                mask={"helix": np.ones(n, dtype=bool)},
-            )
-            self.parts[key].push_down()
 
     @property
     def centroid(self):
@@ -333,29 +309,26 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
         return len(helix_keys)
 
     @classmethod
-    def from_structure(
-        cls, structure: bt_struct.AtomArray, mask: dict[str, np.ndarray]
-    ):
-        res_obj = super().from_structure(structure=structure)
-        helix_num = cls._validate_helix_keys(mask)
-        res_obj.mask = mask
-        res_obj.helix_num = helix_num
-        res_obj.push_down()
-        return res_obj
+    def from_atomarray(cls, *, structure, ref_structure=None,
+                       mask: "str | dict" = "all"):
+        """构建多螺旋束: 每个 mask key 是一条螺旋, 子节点为 CrickHelix 叶。
 
-    @classmethod
-    def from_helix_num(cls, helix_num: int):
-        res_obj = cls()
-        res_obj.param["helix_num"] = helix_num
-        for i in range(helix_num):
-            key = f"helix_{i+1}"
-            res_obj.mask[key] = None
-            res_obj.parts[key] = CrickHelix()
+        ``mask="all"`` 退化为叶 (仅包裹结构)。否则要求 mask 为 ``helix_<i>``
+        布尔掩码字典, 每条螺旋成为一个 CrickHelix 子节点。
+        """
+        if mask == "all":
+            return cls(structure=structure, ref_structure=ref_structure)
+        helix_num = cls._validate_helix_keys(mask)
+        res_obj = cls(structure=structure, ref_structure=ref_structure)
+        res_obj.helix_num = helix_num
+        for key, m in mask.items():
+            res_obj.mask[key] = m  # 等长于 structure
+            res_obj.parts[key] = CrickHelix(structure=structure[m])  # 叶
         return res_obj
 
     @classmethod
     def from_mask(cls, structure: bt_struct.AtomArray, mask: dict[str, np.ndarray]):
-        return cls.from_structure(structure=structure, mask=mask)
+        return cls.from_atomarray(structure=structure, mask=mask)
 
     @classmethod
     def from_param(
@@ -377,7 +350,9 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
         z_offsets: Iterable[float] | float = 0.0,
         backbone_type: str = "Gly",
     ):
-        res_obj = cls.from_helix_num(helix_num)
+        """按参数生成束结构 (CA/Gly 主链); 不构建子节点 (mask 未提供)。"""
+        res_obj = cls()
+        res_obj.param["helix_num"] = helix_num
         xyz, param = generate_cc_ca_by_cccp(
             helix_num=helix_num,
             residue_num=residue_num,
@@ -410,7 +385,10 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
 class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
 
     def fit(self, verbose: bool = False):
-        """把多螺旋束拟合成 CCCP 参数化模型。"""
+        """把多螺旋束拟合成 CCCP 参数化模型。
+
+        每条螺旋是一个 CrickHelix 叶子节点, 其 structure 即该螺旋。
+        """
         def _log(message: str):
             if verbose:
                 print(f"[CCCPHelixBundle.fit] {message}")
@@ -419,7 +397,7 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         helix_lens = []
         for i in range(self.helix_num):
             key = f"helix_{i+1}"
-            helix = self.atoms(key)
+            helix = self[key].structure
             helix_lens.append(np.sum(helix.atom_name == "CA"))
 
         assert (
@@ -437,12 +415,11 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         )
         for i in range(self.initial_param["helix_num"]):
             key = f"helix_{i+1}"
-            helix = self.atoms(key)
+            helix = self[key].structure
             ca_mask = helix.atom_name == "CA"
             ca_atoms = helix[ca_mask]
             ca_coord_obs[i] = ca_atoms.coord
-            helix_component: CrickHelix = self[key]
-            helix_component.structure = helix
+            self[key].structure = helix
 
         _log("Running staged CCCP bundle optimization")
         param, rmsd, ca_coord_fitted = fit_cc_by_cccp(
@@ -495,8 +472,8 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
 class CCCPHelixBundle(CCCPHelixBundleIO, CCCPHelixBundleOperation):
     """多螺旋 CCCP 束的 Assembly (继承 AssemblyParaRef)。
 
-    mask: dict[str, np.ndarray] = field(default_factory=lambda: {})
-        Like {"helix_1": None, "helix_2": None, ...}
+    mask: dict[str, np.ndarray]
+        每条螺旋在束 structure 上的布尔掩码 (key: ``helix_<i>``)。
     parts: dict[str, CrickHelix]
-        每条螺旋是它的一个子节点 (在 mask 基础上由 push_down 生成)。
+        每条螺旋是一个 CrickHelix 叶子节点。
     """
