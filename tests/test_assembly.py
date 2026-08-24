@@ -615,6 +615,52 @@ class TestCCCPCenterConvergence:
         assert not np.allclose(np.asarray(bundle.xyz[2]), before, atol=1e-2)
 
 
+class TestCrickTrimOrExtend:
+    """CrickHelix.trim_or_extend: 通过 add_atoms/remove_atoms 伸长/缩短叶螺旋。"""
+
+    @staticmethod
+    def _make_helix(residue_num=7):
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        return CrickHelix.from_param(residue_num=residue_num, backbone_type="CA")
+
+    def test_extend_nterm(self):
+        h = self._make_helix()
+        h.trim_or_extend(2, "N")
+        assert len(np.unique(h.structure.res_id)) == 9
+        # N 端新增残基在链首 (res_id 最小)
+        ids = np.unique(h.structure.res_id)
+        assert ids[0] == -1  # 原 1..7, 前面补 2 个 → -1,0,1..7
+
+    def test_extend_cterm(self):
+        h = self._make_helix()
+        h.trim_or_extend(3, "C")
+        assert len(np.unique(h.structure.res_id)) == 10
+        assert np.unique(h.structure.res_id)[-1] == 10
+
+    def test_trim(self):
+        h = self._make_helix()
+        h.trim_or_extend(-2, "N")
+        assert len(np.unique(h.structure.res_id)) == 5
+
+    def test_extend_resn(self):
+        h = self._make_helix()
+        h.trim_or_extend(1, "C", resn="ala")
+        assert np.unique(h.structure.res_id)[-1] == 8
+        # 新增残基为 ALA
+        ca = h.structure[h.structure.atom_name == "CA"]
+        assert set(ca.res_name[ca.res_id == 8]) == {"ALA"}
+
+    def test_validation(self):
+        h = self._make_helix()
+        with pytest.raises(ValueError, match="terminus"):
+            h.trim_or_extend(1, "X")
+        with pytest.raises(TypeError, match="整数"):
+            h.trim_or_extend(1.5, "N")
+        with pytest.raises(ValueError, match="无法缩短"):
+            h.trim_or_extend(-7, "N")
+
+
 class TestCCCPTrimOrExtend:
     """CCCPHelixBundle.trim_or_extend: 用束参数伸长/缩短单根螺旋, 重建束结构。"""
 

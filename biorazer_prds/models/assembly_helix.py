@@ -199,22 +199,25 @@ class CrickHelix(AssemblyParaRef):
         else:
             raise ValueError(f"resn 必须为单字母或三字母残基名, 得到 {resn!r}")
 
-        new_structure = (
-            self._extend_terminus(n, resn, terminus)
-            if n > 0
-            else self._trim_terminus(-n, terminus)
-        )
         new_part = copy.copy(self)
-        new_part.structure = new_structure
+        if n > 0:
+            new_part.add_atoms(self._extend_fragment(n, resn, terminus))
+            # 补全 backbone, 使新残基与既有链的 junction 正确; pulchra 保留
+            # res_id, 再按 res_id 稳定排序使 N 端新增残基回到链首。
+            new_part.structure = pulchra_fix_backbone(new_part.structure)
+            order = np.argsort(new_part.structure.res_id, kind="stable")
+            new_part.structure = new_part.structure[order]
+        else:
+            new_part.remove_atoms(self._trim_mask(-n, terminus))
         new_part.param = {
             **self.param,
-            "residue_num": len(np.unique(new_structure.res_id)),
+            "residue_num": len(np.unique(new_part.structure.res_id)),
         }
         new_part.ref_structure = None
         return self.replace_with(new_part)
 
-    def _extend_terminus(self, n: int, resn: str, terminus: str):
-        """在 terminus 端生成 n 个新残基的 backbone (理想 Crick 延伸)。"""
+    def _extend_fragment(self, n: int, resn: str, terminus: str):
+        """生成 terminus 端 n 个新残基的 CA (理想 Crick 延伸), 供 add_atoms 追加。"""
         required = {
             "residue_num",
             "centroid",
@@ -240,21 +243,16 @@ class CrickHelix(AssemblyParaRef):
         res_ids = np.unique(self.structure.res_id)
         offset = min(res_ids) - 1 - n if terminus == "N" else max(res_ids)
         new_structure.res_id += offset
-        combined = (
-            bt_struct.concatenate([new_structure, self.structure])
-            if terminus == "N"
-            else bt_struct.concatenate([self.structure, new_structure])
-        )
-        return pulchra_fix_backbone(combined)
+        return new_structure
 
-    def _trim_terminus(self, n: int, terminus: str):
-        """从 terminus 端删除 n 个残基。"""
+    def _trim_mask(self, n: int, terminus: str):
+        """返回要删除的末端 n 个残基的布尔掩码, 供 remove_atoms 使用。"""
         res_ids = self.structure.res_id
         unique_res = np.unique(res_ids)
         if n >= len(unique_res):
             raise ValueError(f"无法缩短 {n} 个残基: 螺旋仅 {len(unique_res)} 个残基")
-        keep = unique_res[n:] if terminus == "N" else unique_res[:-n]
-        return self.structure[np.isin(res_ids, keep)]
+        remove = unique_res[:n] if terminus == "N" else unique_res[-n:]
+        return np.isin(res_ids, remove)
 
 
 @dataclass
@@ -513,22 +511,25 @@ class CCCPHelixBundle(AssemblyParaRef):
 
         key = list(self.parts)[helix_index]
         helix_part = self.parts[key]
-        new_structure = (
-            self._extend_helix_terminus(helix_index, n, resn, terminus)
-            if n > 0
-            else self._trim_helix_terminus(helix_index, -n, terminus)
-        )
         new_part = copy.copy(helix_part)
-        new_part.structure = new_structure
+        if n > 0:
+            new_part.add_atoms(self._extend_helix_fragment(helix_index, n, resn, terminus))
+            # 补全 backbone, 使新残基与既有螺旋的 junction 正确; pulchra 保留
+            # res_id, 再按 res_id 稳定排序使 N 端新增残基回到链首。
+            new_part.structure = pulchra_fix_backbone(new_part.structure)
+            order = np.argsort(new_part.structure.res_id, kind="stable")
+            new_part.structure = new_part.structure[order]
+        else:
+            new_part.remove_atoms(self._trim_helix_mask(helix_index, -n, terminus))
         new_part.param = {
             **helix_part.param,
-            "residue_num": len(np.unique(new_structure.res_id)),
+            "residue_num": len(np.unique(new_part.structure.res_id)),
         }
         new_part.ref_structure = None
         return helix_part.replace_with(new_part)
 
-    def _extend_helix_terminus(self, helix_index: int, n: int, resn: str, terminus: str):
-        """用束参数在 helix_index 螺旋末端生成 n 个新残基的 backbone。"""
+    def _extend_helix_fragment(self, helix_index: int, n: int, resn: str, terminus: str):
+        """用束参数生成 helix_index 螺旋末端 n 个新残基的 CA, 供 add_atoms 追加。"""
         required = {
             "helix_num",
             "residue_num",
@@ -569,15 +570,10 @@ class CCCPHelixBundle(AssemblyParaRef):
         res_ids = np.unique(helix_part.structure.res_id)
         offset = min(res_ids) - 1 - n if terminus == "N" else max(res_ids)
         new_structure.res_id += offset
-        combined = (
-            bt_struct.concatenate([new_structure, helix_part.structure])
-            if terminus == "N"
-            else bt_struct.concatenate([helix_part.structure, new_structure])
-        )
-        return pulchra_fix_backbone(combined)
+        return new_structure
 
-    def _trim_helix_terminus(self, helix_index: int, n: int, terminus: str):
-        """从 helix_index 螺旋末端删除 n 个残基。"""
+    def _trim_helix_mask(self, helix_index: int, n: int, terminus: str):
+        """返回 helix_index 螺旋末端要删除的 n 个残基的布尔掩码, 供 remove_atoms 使用。"""
         helix_part = self.parts[list(self.parts)[helix_index]]
         res_ids = helix_part.structure.res_id
         unique_res = np.unique(res_ids)
@@ -585,5 +581,5 @@ class CCCPHelixBundle(AssemblyParaRef):
             raise ValueError(
                 f"无法缩短 {n} 个残基: 螺旋仅 {len(unique_res)} 个残基"
             )
-        keep = unique_res[n:] if terminus == "N" else unique_res[:-n]
-        return helix_part.structure[np.isin(res_ids, keep)]
+        remove = unique_res[:n] if terminus == "N" else unique_res[-n:]
+        return np.isin(res_ids, remove)
