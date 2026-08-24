@@ -10,7 +10,6 @@ from biorazer_prds.models import (
     Assembly,
     AssemblyParaRef,
     AssemblyRealRef,
-    Helix,
     CrickHelix,
     CCCPHelixBundle,
 )
@@ -28,7 +27,6 @@ def test_public_exports_exist():
         Assembly,
         AssemblyParaRef,
         AssemblyRealRef,
-        Helix,
         CrickHelix,
         CCCPHelixBundle,
     ):
