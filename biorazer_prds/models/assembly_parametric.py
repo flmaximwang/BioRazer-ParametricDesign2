@@ -2,14 +2,12 @@
 
 ref_structure 是 *虚拟* 的: 由拟合参数生成的理想轨迹, 作为放置/注册的参考几何。
 携带参数拟合机制 (``param`` / ``initial_param`` / ``extra_param`` /
-``params_not_to_fit`` / ``fitted_structure`` / ``rmsd``) 与
-``fit`` / ``modify`` / ``from_params``。
+``params_not_to_fit`` / ``rmsd``) 与 ``fit`` / ``modify`` / ``from_params``。
+拟合得到的虚拟结构直接存入 ``ref_structure``。
 """
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-
-import biotite.structure as bt_struct
 
 from .assembly import Assembly
 
@@ -28,8 +26,6 @@ class AssemblyParaRef(Assembly):
         不参与拟合的额外参数。
     params_not_to_fit : list[str]
         拟合期间保持固定的参数名。
-    fitted_structure : bt_struct.AtomArray
-        由拟合参数生成的虚拟参考结构。
     rmsd : float
         拟合模型的均方根偏差。
     """
@@ -39,7 +35,6 @@ class AssemblyParaRef(Assembly):
     extra_param: dict = field(default_factory=dict)
     params_not_to_fit: list[str] = field(default_factory=list)
 
-    fitted_structure: bt_struct.AtomArray = None
     rmsd: float = None
 
     @classmethod
@@ -49,7 +44,8 @@ class AssemblyParaRef(Assembly):
 
     @abstractmethod
     def fit(self, verbose: bool = False):
-        """用给定坐标拟合参数, 并把参数/rmsd/拟合坐标存入对象。
+        """用给定坐标拟合参数; 把参数/rmsd 存入对象, 拟合的虚拟结构存入
+        ``ref_structure``。
 
         这是"坐标 → 参数"的拟合 (参数化参考的 fit)。
 

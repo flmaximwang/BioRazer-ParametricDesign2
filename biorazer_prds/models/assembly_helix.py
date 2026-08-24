@@ -180,7 +180,7 @@ class CrickHelixOperation(CrickHelixProperty):
         fitted_structure.res_id = ca_atoms.res_id
         fitted_structure.res_name = ca_atoms.res_name
         fitted_structure.coord = fitted_coord
-        self.fitted_structure = fitted_structure
+        self.ref_structure = fitted_structure
         self.extra_param["helix_type"] = self.calculate_helix_type(self.param["omega"])
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
@@ -459,7 +459,7 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
             list(range(1, helix_lens[0] + 1)) * self.helix_num
         )
         fitted_structure.coord = ca_coord_fitted
-        self.fitted_structure = fitted_structure
+        self.ref_structure = fitted_structure
 
         self._xyz = np.vstack(
             (self.extra_param["x"], self.extra_param["y"], self.extra_param["z"])
