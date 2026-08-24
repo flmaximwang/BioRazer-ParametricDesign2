@@ -706,6 +706,90 @@ class TestCCCPTrimOrExtend:
             leaf.trim_or_extend(0, 1, "N")
 
 
+class TestAddAtoms:
+    """add_atoms: 向内部节点追加原子, 合并已有 mask / 新建 part, 重建结构。"""
+
+    @staticmethod
+    def _make_internal():
+        parent = Assembly()
+        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
+        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
+        parent.merge_up()
+        return parent
+
+    def test_merge_into_existing_part(self):
+        parent = self._make_internal()
+        parent.add_atoms(_atoms(2, 100, "A"), {"a": np.array([True, True])})
+        # part a 3→5, part b 不变
+        assert len(parent.parts["a"].structure) == 5
+        assert len(parent.parts["b"].structure) == 2
+        assert len(parent.structure) == 7
+        # structure = 子节点按 parts 顺序拼接 (a 块 = 原 3 个 + 新 2 个; b 块 2 个)
+        np.testing.assert_array_equal(
+            _coords(parent.structure[:5]),
+            np.concatenate([_coords(_atoms(3, 0, "A")), _coords(_atoms(2, 100, "A"))]),
+        )
+        np.testing.assert_array_equal(
+            _coords(parent.structure[5:]), _coords(_atoms(2, 10, "B"))
+        )
+        # mask 重建为连续区间, 且 push_down 往返一致
+        assert parent.mask["a"].sum() == 5
+        assert parent.mask["b"].sum() == 2
+        parent.push_down()
+        assert len(parent.parts["a"].structure) == 5
+        assert len(parent.parts["b"].structure) == 2
+
+    def test_create_new_part(self):
+        parent = self._make_internal()
+        parent.add_atoms(_atoms(3, 200, "C"), {"c": np.array([True, True, True])})
+        assert "c" in parent.parts
+        assert len(parent.parts["c"].structure) == 3
+        assert len(parent.structure) == 8
+        assert parent.mask["c"].sum() == 3
+        # parts 顺序: a, b, c → 新原子在末尾块
+        np.testing.assert_array_equal(
+            _coords(parent.structure[5:]), _coords(_atoms(3, 200, "C"))
+        )
+
+    def test_mixed_merge_and_new(self):
+        parent = self._make_internal()
+        extra = _atoms(4, 300, "X")
+        mask = {
+            "a": np.array([True, True, False, False]),
+            "c": np.array([False, False, True, True]),
+        }
+        parent.add_atoms(extra, mask)
+        assert len(parent.parts["a"].structure) == 5  # 3 + 2
+        assert len(parent.parts["c"].structure) == 2
+        assert len(parent.structure) == 9
+        assert parent.mask["a"].sum() == 5
+        assert parent.mask["c"].sum() == 2
+
+    def test_validation(self):
+        parent = self._make_internal()
+        extra = _atoms(2, 100, "A")
+        with pytest.raises(ValueError, match="长度"):
+            parent.add_atoms(extra, {"a": np.array([True])})
+        with pytest.raises(ValueError, match="完全覆盖"):
+            parent.add_atoms(extra, {"a": np.array([True, False])})
+        with pytest.raises(TypeError, match="AtomArray"):
+            parent.add_atoms("not-an-array", {"a": np.array([True, True])})
+        # 叶节点不支持
+        leaf = Assembly(structure=_atoms(3, 0, "A"))
+        with pytest.raises(ValueError, match="内部节点"):
+            leaf.add_atoms(extra, {"a": np.array([True, True])})
+        # 内部子节点不支持
+        inner = Assembly()
+        inner.append_part("x1", Assembly(structure=_atoms(2, 0, "A")))
+        inner.merge_up()
+        parent2 = Assembly()
+        parent2.append_part("x", inner)
+        parent2.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
+        parent2.merge_up()
+        with pytest.raises(ValueError, match="内部节点"):
+            parent2.add_atoms(_atoms(1, 100, "A"), {"x": np.array([True])})
+
+
 class TestReplaceWith:
     """replace_with(): 用新块替换本节点, 重建本节点及以上所有祖先的 structure/mask。"""
 
