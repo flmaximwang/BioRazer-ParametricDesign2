@@ -385,7 +385,7 @@ def fit_cc_by_cccp(
         structure_list.append(arr)
 
     # Stage 0: quickly place the model by optimizing only centroid.
-    _log("Stage 0/3: optimize centroid")
+    _log("Stage 0/3: optimize centroid and z")
     params_to_optimize = ["centroid"]
     stage_params, result = _optimize_cc_by_cccp(
         ca_coords_obs=ca_coords_obs,
@@ -393,6 +393,13 @@ def fit_cc_by_cccp(
         param_names_to_optimize=_exclude_params(params_to_optimize, params_not_to_fit),
     )
     _record_structure()
+
+    params_to_optimize = ["z"]
+    stage_params, result = _optimize_cc_by_cccp(
+        ca_coords_obs=ca_coords_obs,
+            initial_params=stage_params,
+            param_names_to_optimize=_exclude_params(params_to_optimize, params_not_to_fit),
+    )
 
     # Multi-stage refinement loop:
     # 1) angular/offset alignment,
