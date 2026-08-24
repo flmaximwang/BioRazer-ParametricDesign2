@@ -707,148 +707,52 @@ class TestCCCPTrimOrExtend:
 
 
 class TestAddAtoms:
-    """add_atoms: 简单追加原子到 structure, 按 mask 创建/合并 part, 不更新 mask。"""
+    """add_atoms: 仅叶节点, 追加 atom_array 到 structure, 无 mask 参数。"""
 
-    @staticmethod
-    def _make_internal():
-        parent = Assembly()
-        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
-        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
-        parent.merge_up()
-        return parent
-
-    def test_leaf_append_no_mask(self):
+    def test_leaf_append(self):
         leaf = Assembly(structure=_atoms(3, 0, "A"))
-        leaf.add_atoms(_atoms(2, 100, "A"))  # mask=None
+        leaf.add_atoms(_atoms(2, 100, "A"))
         assert len(leaf.structure) == 5
         assert not leaf.parts
         np.testing.assert_array_equal(
             _coords(leaf.structure)[3:], _coords(_atoms(2, 100, "A"))
         )
 
-    def test_leaf_create_first_part(self):
+    def test_internal_raises(self):
+        parent = Assembly()
+        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
+        parent.merge_up()
+        with pytest.raises(ValueError, match="叶节点"):
+            parent.add_atoms(_atoms(2, 100, "A"))
+
+    def test_non_atomarray_raises(self):
         leaf = Assembly(structure=_atoms(3, 0, "A"))
-        leaf.add_atoms(_atoms(2, 100, "A"), {"a": np.array([True, True])})
-        assert len(leaf.structure) == 5
-        assert "a" in leaf.parts
-        assert len(leaf.parts["a"].structure) == 2
-
-    def test_merge_into_existing_part(self):
-        parent = self._make_internal()
-        parent.add_atoms(_atoms(2, 100, "A"), {"a": np.array([True, True])})
-        # part a 3→5, part b 不变
-        assert len(parent.parts["a"].structure) == 5
-        assert len(parent.parts["b"].structure) == 2
-        # structure = 原 structure 末尾追加 atom_array (不重排)
-        assert len(parent.structure) == 7
-        np.testing.assert_array_equal(
-            _coords(parent.structure)[5:], _coords(_atoms(2, 100, "A"))
-        )
-
-    def test_create_new_part(self):
-        parent = self._make_internal()
-        parent.add_atoms(_atoms(3, 200, "C"), {"c": np.array([True, True, True])})
-        assert "c" in parent.parts
-        assert len(parent.parts["c"].structure) == 3
-        assert len(parent.structure) == 8
-        np.testing.assert_array_equal(
-            _coords(parent.structure)[5:], _coords(_atoms(3, 200, "C"))
-        )
-
-    def test_mixed_merge_and_new(self):
-        parent = self._make_internal()
-        extra = _atoms(4, 300, "X")
-        parent.add_atoms(
-            extra,
-            {
-                "a": np.array([True, True, False, False]),
-                "c": np.array([False, False, True, True]),
-            },
-        )
-        assert len(parent.parts["a"].structure) == 5  # 3 + 2
-        assert len(parent.parts["c"].structure) == 2
-        assert len(parent.structure) == 9
-
-    def test_mask_not_updated(self):
-        parent = self._make_internal()
-        parent.add_atoms(_atoms(2, 100, "A"), {"a": np.array([True, True])})
-        # mask 保持原样 (不更新)
-        assert parent.mask["a"].sum() == 3
-        assert parent.mask["b"].sum() == 2
-
-    def test_validation(self):
-        parent = self._make_internal()
-        with pytest.raises(ValueError, match="长度"):
-            parent.add_atoms(_atoms(2, 100, "A"), {"a": np.array([True])})
         with pytest.raises(TypeError, match="AtomArray"):
-            parent.add_atoms("not-an-array", {"a": np.array([True, True])})
+            leaf.add_atoms("not-an-array")
 
 
 class TestRemoveAtoms:
-    """remove_atoms: 按单个 mask 移除原子, 同步更新 structure/mask, 删除空 part。"""
+    """remove_atoms: 仅叶节点, mask 为单布尔数组(True=移除), 只改 structure。"""
 
-    @staticmethod
-    def _make_internal():
-        parent = Assembly()
-        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
-        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
-        parent.merge_up()
-        return parent
-
-    def test_remove_from_one_part(self):
-        parent = self._make_internal()
-        rm = np.zeros(5, bool); rm[1] = True  # 原子 1 属于 part a
-        parent.remove_atoms(rm)
-        assert len(parent.structure) == 4
-        assert len(parent.parts["a"].structure) == 2  # 保留原子 0,2
-        assert len(parent.parts["b"].structure) == 2
-        np.testing.assert_array_equal(
-            _coords(parent.parts["a"].structure), [[0, 0, 0], [2, 0, 0]]
-        )
-        # mask 重建为连续区间, push_down 往返一致
-        assert parent.mask["a"].sum() == 2
-        parent.push_down()
-        assert len(parent.parts["a"].structure) == 2
-
-    def test_remove_across_parts(self):
-        parent = self._make_internal()
-        rm = np.zeros(5, bool); rm[[2, 3]] = True  # 原子2 在 a, 原子3 在 b
-        parent.remove_atoms(rm)
-        assert len(parent.structure) == 3
-        assert len(parent.parts["a"].structure) == 2
-        assert len(parent.parts["b"].structure) == 1
-
-    def test_remove_drops_empty_part(self):
-        parent = self._make_internal()
-        rm = np.zeros(5, bool); rm[:3] = True  # part a 全删
-        parent.remove_atoms(rm)
-        assert "a" not in parent.parts
-        assert "b" in parent.parts
-        assert len(parent.structure) == 2
-
-    def test_remove_into_internal_child(self):
-        inner = Assembly()
-        inner.append_part("x1", Assembly(structure=_atoms(2, 0, "A")))
-        inner.merge_up()
-        parent = Assembly()
-        parent.append_part("x", inner)
-        parent.append_part("b", Assembly(structure=_atoms(2, 10, "B")))
-        parent.merge_up()
-        rm = np.zeros(4, bool); rm[0] = True  # 原子 0 属于 x/x1
-        parent.remove_atoms(rm)
-        assert len(parent.parts["x"].parts["x1"].structure) == 1
-        assert len(parent.structure) == 3
-
-    def test_leaf_slices_structure(self):
+    def test_leaf_remove(self):
         leaf = Assembly(structure=_atoms(3, 0, "A"))
         leaf.remove_atoms(np.array([True, False, False]))
         assert len(leaf.structure) == 2
         np.testing.assert_array_equal(_coords(leaf.structure), [[1, 0, 0], [2, 0, 0]])
+        # 不触碰 mask 字段
+        assert leaf.mask == {}
+
+    def test_internal_raises(self):
+        parent = Assembly()
+        parent.append_part("a", Assembly(structure=_atoms(3, 0, "A")))
+        parent.merge_up()
+        with pytest.raises(ValueError, match="叶节点"):
+            parent.remove_atoms(np.array([False, False, False]))
 
     def test_validation(self):
-        parent = self._make_internal()
+        leaf = Assembly(structure=_atoms(3, 0, "A"))
         with pytest.raises(ValueError, match="长度"):
-            parent.remove_atoms(np.array([True]))
+            leaf.remove_atoms(np.array([True]))
 
 
 class TestReplaceWith:

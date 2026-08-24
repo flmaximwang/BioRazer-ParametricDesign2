@@ -120,61 +120,34 @@ class Assembly:
         self._build_subtree(mask, np.arange(len(self.structure)))
         return self
 
-    def add_atoms(self, atom_array, mask=None):
-        """向本节点追加原子, 并按 mask 创建/合并子节点 (part)。
-
-        简单版本: 仅把 ``atom_array`` 追加到本节点 structure, 并按 ``mask``
-        把新原子分派到子节点 — key 已存在则追加到该子节点结构末尾 (合并), 否则
-        创建新的子节点。支持叶节点 (无子节点); 无 ``mask`` (或为空) 时仅追加
-        原子、不建 part。本方法**不更新** ``self.mask`` (保持原样); 需要 mask
-        一致性时另行调用 ``merge_up()``。
+    def add_atoms(self, atom_array):
+        """向叶节点结构追加原子。仅支持叶节点 (无子节点)。
 
         Parameters
         ----------
         atom_array : bt_struct.AtomArray
             要追加的原子。
-        mask : dict[str, np.ndarray] | None, optional
-            key -> 等长于 ``atom_array`` 的布尔掩码, 分派新原子到对应子节点。
-            None/空则只追加原子。
 
         Returns
         -------
         self
         """
+        if self.parts:
+            raise ValueError(
+                f"add_atoms 仅支持叶节点 (无子节点), 该节点有子节点: {list(self.parts)}"
+            )
         if not isinstance(atom_array, bt_struct.AtomArray):
             raise TypeError(
                 f"atom_array 必须为 biotite AtomArray, 得到 {type(atom_array).__name__}"
             )
         self.structure = bt_struct.concatenate([self.structure, atom_array])
-        if not mask:
-            return self
-        for name, m in mask.items():
-            m_arr = np.asarray(m, dtype=bool)
-            if m_arr.ndim != 1 or len(m_arr) != len(atom_array):
-                raise ValueError(
-                    f"mask[{name!r}] 长度须等于 atom_array 的原子数 "
-                    f"({len(atom_array)})"
-                )
-            new_atoms = atom_array[m_arr]
-            if name in self.parts:
-                self.parts[name].structure = bt_struct.concatenate(
-                    [self.parts[name].structure, new_atoms]
-                )
-            else:
-                new_child = type(self)(
-                    structure=new_atoms, ref_structure=self.ref_structure
-                )
-                new_child._parent = self
-                self.parts[name] = new_child
         return self
 
     def remove_atoms(self, mask):
-        """从本节点移除原子, 同步更新 structure 与各子节点的 mask。
+        """从叶节点结构移除原子。仅支持叶节点 (无子节点)。
 
-        输入为单个布尔数组 (长度 = 本节点原子数), True 表示要移除的原子。
-        每个子节点保留其原 mask 与 ``~mask`` 的交集部分; 若某子节点的原子被
-        全部移除, 该子节点 (part) 一并删除。随后按 ``merge_up`` 的拼接不变式
-        重建 structure 与 mask。若本节点是叶节点 (无子节点), 仅切片 structure。
+        ``mask`` 是单个布尔数组 (长度 = 本节点原子数), True 表示要移除的原子;
+        仅修改 ``structure`` (``structure[~mask]``), 不触碰 ``mask`` 字段。
 
         Parameters
         ----------
@@ -185,33 +158,17 @@ class Assembly:
         -------
         self
         """
+        if self.parts:
+            raise ValueError(
+                f"remove_atoms 仅支持叶节点 (无子节点), 该节点有子节点: {list(self.parts)}"
+            )
         mask = np.asarray(mask, dtype=bool)
         if mask.ndim != 1 or len(mask) != len(self.structure):
             raise ValueError(
                 f"remove_atoms 的 mask 长度须等于 structure 原子数 "
                 f"({len(self.structure)}), 得到 {mask.size}"
             )
-        keep = ~mask
-        if not self.parts:
-            self.structure = self.structure[keep]
-            return self
-        # 确保每个子节点都有有效 mask (拼接不变式)
-        if set(self.mask) != set(self.parts):
-            self._recompute_from_children()
-        new_parts = {}
-        for name, child in self.parts.items():
-            child_keep = keep[self.mask[name]]
-            if not child_keep.any():
-                continue  # 该子节点原子被全部移除 → 删除 part
-            if child.parts:
-                child.remove_atoms(~child_keep)
-                if not child.parts:
-                    continue  # 递归移除后子节点变空
-            else:
-                child.structure = child.structure[child_keep]
-            new_parts[name] = child
-        self.parts = new_parts
-        self._recompute_from_children()
+        self.structure = self.structure[~mask]
         return self
 
     def append_part(self, name, part):
