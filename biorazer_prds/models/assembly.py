@@ -17,6 +17,7 @@
 """
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 
 import numpy as np
 import biotite.structure as bt_struct
@@ -137,8 +138,13 @@ class Assembly:
         self.structure.coord = new_coord
 
     def atoms(self, name):
-        """按子名取回父 structure 中该子对应的原子子集 (旧 ``__getitem__`` 语义)。"""
-        self.check_part_name(name)
+        """按掩码名取回父 structure 中对应的原子子集 (旧 ``__getitem__`` 语义)。
+
+        名须存在于 ``mask`` (不要求是子节点; 叶节点也可用, 如 CrickHelix 的
+        ``\"helix\"``)。
+        """
+        if name not in self.mask:
+            raise KeyError(f"Mask '{name}' not found in {list(self.mask)}")
         return self.structure[self.mask[name]]
 
     # ------------------------------------------------------------------
@@ -295,6 +301,25 @@ class Assembly:
         """计算把 part_1 平移到 part_2 的平移向量
         (part_2.centroid - part_1.centroid)。"""
         return part_2.centroid - part_1.centroid
+
+    @staticmethod
+    def calculate_transformation_between(part_1, part_2):
+        """计算把 part_1 对齐到 part_2 的变换 (translation, rotation)。
+
+        先平移使质心对齐, 再旋转使 part_1 的局部轴对齐 part_2 (要求 part_1
+        已对齐规范轴)。两参数都需定义 ``centroid`` 与 ``xyz``。
+        """
+        translation = part_2.centroid - part_1.centroid
+
+        part_1_center_rotation = part_1.calculate_center_rotation()
+        part_2_copy = deepcopy(part_2)
+        part_2_copy.rotate(
+            part_1_center_rotation, centroid_to_origin=False, XYZ_to_xyz=False
+        )
+        x, y, z = part_2_copy.xyz
+        rotation = calculate_rotation(x, y, z)
+
+        return translation, rotation
 
     # ------------------------------------------------------------------
     # IO

@@ -1,10 +1,20 @@
 """模型包导入冒烟测试。
 
-保证 ``biorazer_prds.models`` 及其公共导出 (Assembly / AssemblyPart / 各 ref 变体)
-在真实 BioRazer 环境下可导入。这是重构前后的行为基线。
+保证 ``biorazer_prds.models`` 及其公共导出在真实 BioRazer 环境下可导入。
+这是重构前后的行为基线。
 """
 
 import importlib
+
+from biorazer_prds.models import (
+    Assembly,
+    AssemblyRef,
+    AssemblyParaRef,
+    AssemblyRealRef,
+    Helix,
+    CrickHelix,
+    CCCPHelixBundle,
+)
 
 
 def test_models_package_importable():
@@ -14,8 +24,23 @@ def test_models_package_importable():
 
 
 def test_public_exports_exist():
-    """当前公共导出应包含 Assembly 与 AssemblyPart。"""
-    from biorazer_prds.models import Assembly, AssemblyPart
+    """公共导出应包含统一 Assembly 及各 ref/螺旋子类。"""
+    for cls in (
+        Assembly,
+        AssemblyRef,
+        AssemblyParaRef,
+        AssemblyRealRef,
+        Helix,
+        CrickHelix,
+        CCCPHelixBundle,
+    ):
+        assert cls is not None
 
-    assert Assembly is not None
-    assert AssemblyPart is not None
+
+def test_hierarchy():
+    """ref 变体是 Assembly 的子类; 螺旋类挂在 AssemblyParaRef 之下。"""
+    assert issubclass(AssemblyRef, Assembly)
+    assert issubclass(AssemblyParaRef, AssemblyRef)
+    assert issubclass(AssemblyRealRef, AssemblyRef)
+    assert issubclass(CrickHelix, AssemblyParaRef)
+    assert issubclass(CCCPHelixBundle, AssemblyParaRef)

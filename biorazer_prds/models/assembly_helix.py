@@ -1,18 +1,22 @@
 import re
 from typing import Iterable
 from dataclasses import dataclass, field
-from .assembly_part import *
+
+import numpy as np
+import biotite.structure as bt_struct
+
 import biorazer.structure.io as br_struct_io
+
+from .assembly_parametric import AssemblyParaRef
 from ..params.helix_cp.generate import generate_helix_ca_by_crick
 from ..params.helix_cp.fit import fit_helix_by_crick
 from ..params.cccp.generate import generate_cc_ca_by_cccp
 from ..params.cccp.fit import fit_cc_by_cccp
 from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
-from .assembly_part_parametric import AssemblyPartParaRef
 
 
 @dataclass
-class HelixProperty(AssemblyPartParaRef):
+class HelixProperty(AssemblyParaRef):
     mask: dict[str, np.ndarray] = field(default_factory=lambda: {"helix": None})
 
 
@@ -28,27 +32,23 @@ class HelixOperation(HelixProperty):
 
 @dataclass
 class Helix(HelixIO, HelixOperation):
-    """
-    A class representing a part of an assembly that is a pure helix.
-    It inherits from AssemblyPart and provides specific functionality for helix parts.
-    """
+    """一条纯螺旋的 Assembly (继承 AssemblyParaRef)。"""
 
 
 @dataclass
 class CrickHelixProperty(Helix):
-    """
-    Params
+    """Params
     ------
     direction: np.ndarray
-        A normalized vector representing the direction of the helix.
+        螺旋方向的归一化向量。
     centroid: np.ndarray
-        The centroid of the helix.
+        螺旋质心。
     radius: float
-        The radius of the helix.
+        螺旋半径。
     pitch: float
-        The pitch of the helix.
+        螺距。
     phase: float
-        The phase of the helix.
+        螺旋相位。
     """
 
     @property
@@ -126,8 +126,7 @@ class CrickHelixIO(CrickHelixProperty):
         phi0: float = 0.0,
         backbone_type: str = "Gly",
     ):
-        """
-        Parameters
+        """Parameters
         ----------
         backbone_type : str
             - "CA": only CA atoms
@@ -160,34 +159,21 @@ class CrickHelixIO(CrickHelixProperty):
 class CrickHelixOperation(CrickHelixProperty):
 
     def fit(self, verbose: bool = False):
-        """
-        Fit observed CA coordinates to a single Crick helix model.
-
-        Workflow
-        --------
-        1. Extract CA atoms from the masked helix structure.
-        2. Run non-linear fitting (`fit_helix_by_crick`) to obtain helix parameters.
-        3. Build a local orthonormal frame (`x`, `y`, `z`) for downstream transforms.
-        4. Store RMSD and fitted CA-only structure for diagnostics/visualization.
-        5. Infer a discrete helix type label from fitted omega.
-        """
-
+        """把观测 CA 坐标拟合成单条 Crick 螺旋模型。"""
         def _log(message: str):
             if verbose:
                 print(f"[CrickHelix.fit] {message}")
 
         _log("Preparing CA coordinates from helix mask")
-        atom_array = self["helix"]
+        atom_array = self.atoms("helix")
         ca_mask = atom_array.atom_name == "CA"
         ca_atoms = atom_array[ca_mask]
         ca_coord = ca_atoms.coord
 
-        # Fit Crick parameters from observed CA trace.
         _log(f"Running Crick fitting on {ca_coord.shape[0]} CA atoms")
         param, rmsd, fitted_coord = fit_helix_by_crick(ca_coord, verbose=verbose)
         self.param = param
 
-        # Construct right-handed local axes with z as helix direction.
         _log("Constructing local orthonormal frame")
         z = self.param["direction"]
         x_prototype = ca_atoms.coord[0] - self.param["centroid"]
@@ -199,7 +185,6 @@ class CrickHelixOperation(CrickHelixProperty):
         self.extra_param["z"] = z
         self.rmsd = rmsd
 
-        # Keep a fitted CA-only AtomArray aligned with source chain/residue metadata.
         fitted_structure = bt_struct.AtomArray(length=ca_coord.shape[0])
         fitted_structure.atom_name = np.array(["CA"] * ca_coord.shape[0])
         fitted_structure.element = np.array(["C"] * ca_coord.shape[0])
@@ -212,13 +197,11 @@ class CrickHelixOperation(CrickHelixProperty):
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
     def modify(self, method, *args, **kwargs):
-        """
-
-        Methods
+        """Methods
         -------
         elongate_with_gly : elongate the helix by adding glycine residues
             - length : int, number of residues to add
-            - terminus : str, "N" for N-terminus, "C" for C-terminus, "B" for both termini
+            - terminus : str, "N" for N-terminus, "C" for C-terminus, "B" for both
         """
         if method == "elongate_with_gly":
             length = kwargs.get("length", 1)
@@ -228,16 +211,6 @@ class CrickHelixOperation(CrickHelixProperty):
             raise ValueError(f"Unsupported modification method: {method}")
 
     def _modify_elongate_with_gly(self, length: int, terminus: str = "C"):
-        """
-        Add glycine residues to the helix to elongate it.
-
-        Parameters
-        ----------
-        length : int
-            Number of residues to add.
-        terminus : str
-            "N" for N-terminus, "C" for C-terminus, "B" for both termini.
-        """
         assert (
             isinstance(length, int) and length > 0
         ), "Length must be a positive integer."
@@ -271,19 +244,16 @@ class CrickHelixOperation(CrickHelixProperty):
 
 @dataclass
 class CrickHelix(CrickHelixIO, CrickHelixOperation):
-    """
-    A class representing a part of an assembly that is a pure helix.
-    It inherits from AssemblyPart and provides specific functionality for helix parts.
-    """
+    """单条 Crick 螺旋的 Assembly (继承 AssemblyParaRef)。"""
 
 
 @dataclass
-class CCCPHelixBundleProperty(AssemblyPartParaRef):
+class CCCPHelixBundleProperty(AssemblyParaRef):
 
     mask: dict[str, np.ndarray] = field(
         default_factory=lambda: {f"helix_{i+1}": None for i in range(2)}
     )
-    component: dict[str, CrickHelix] = field(
+    parts: dict[str, CrickHelix] = field(
         default_factory=lambda: {f"helix_{i+1}": CrickHelix() for i in range(2)}
     )
     param: dict = field(
@@ -306,12 +276,16 @@ class CCCPHelixBundleProperty(AssemblyPartParaRef):
         }
     )
 
-    def update_component(self):
+    def push_down(self):
+        """自顶向下: 按 mask 把每条螺旋切成独立的 CrickHelix 子节点。"""
         for i in range(self.helix_num):
             key = f"helix_{i+1}"
-            self.component[key] = CrickHelix.from_structure(
-                structure=self[key], mask={"helix": self.mask[key]}
+            n = int(np.sum(self.mask[key]))
+            self.parts[key] = CrickHelix(
+                structure=self.structure[self.mask[key]],
+                mask={"helix": np.ones(n, dtype=bool)},
             )
+            self.parts[key].push_down()
 
     @property
     def centroid(self):
@@ -366,7 +340,7 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
         helix_num = cls._validate_helix_keys(mask)
         res_obj.mask = mask
         res_obj.helix_num = helix_num
-        res_obj.update_component()
+        res_obj.push_down()
         return res_obj
 
     @classmethod
@@ -376,53 +350,31 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
         for i in range(helix_num):
             key = f"helix_{i+1}"
             res_obj.mask[key] = None
-            res_obj.component[key] = CrickHelix()
+            res_obj.parts[key] = CrickHelix()
         return res_obj
 
     @classmethod
     def from_mask(cls, structure: bt_struct.AtomArray, mask: dict[str, np.ndarray]):
-        helix_num = 0
-        for key in mask:
-            if re.match(r"helix_\d+", key):
-                helix_num += 1
-            else:
-                raise ValueError(
-                    f"Invalid key in mask: {key}. Expected format: 'helix_<number>'"
-                )
-        for i in range(helix_num):
-            expected_key = f"helix_{i+1}"
-            if expected_key not in mask:
-                raise ValueError(
-                    f"Missing expected key in mask: {expected_key}. Keys must be consecutive."
-                )
-        res_obj = cls(structure=structure)
-        res_obj.mask = mask
-        res_obj.component = {
-            key: CrickHelix(
-                structure=structure[mask[key]], mask={"helix": mask[key][mask[key]]}
-            )
-            for key in mask
-        }
-        return res_obj
+        return cls.from_structure(structure=structure, mask=mask)
 
     @classmethod
     def from_param(
         cls,
         helix_num: int = 2,
         residue_num: int = 7,
-        senses: Iterable[int] = None,  # Sense of each helix
+        senses: Iterable[int] = None,
         centroid: Iterable[float] = [0.0, 0.0, 0.0],
         y_prototype: Iterable[float] = [0.0, 1.0, 0.0],
         z: Iterable[float] = [0.0, 0.0, 1.0],
-        r0: float = 5.0,  # Radius of the coiled bundle
-        w0: float = -2 * np.pi / 100,  # Frequency of the coiled bundle
-        phi0: float = 0.0,  # Phase shift of the coiled bundle
-        r1s: Iterable[float] | float = 2.26,  # Radius of each helix
-        w1s: Iterable[float] | float = 4 * np.pi / 7,  # Frequency of each helix
-        phi1s: Iterable[float] | float = -np.pi / 20,  # Phase shift of each helix
-        pitch_angles: Iterable[float] | float = -0.2096,  # Pitch angle of each helix
-        dphi0s: Iterable[float] = None,  # Separation angle between helices
-        z_offsets: Iterable[float] | float = 0.0,  # Z-offsets for each helix
+        r0: float = 5.0,
+        w0: float = -2 * np.pi / 100,
+        phi0: float = 0.0,
+        r1s: Iterable[float] | float = 2.26,
+        w1s: Iterable[float] | float = 4 * np.pi / 7,
+        phi1s: Iterable[float] | float = -np.pi / 20,
+        pitch_angles: Iterable[float] | float = -0.2096,
+        dphi0s: Iterable[float] = None,
+        z_offsets: Iterable[float] | float = 0.0,
         backbone_type: str = "Gly",
     ):
         res_obj = cls.from_helix_num(helix_num)
@@ -458,23 +410,7 @@ class CCCPHelixBundleIO(CCCPHelixBundleProperty):
 class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
 
     def fit(self, verbose: bool = False):
-        """
-        Fit a multi-helix bundle to the CCCP parameterization.
-
-        Assumptions
-        -----------
-        - Every helix in the bundle contributes CA atoms only.
-        - All helices must have identical CA length for joint fitting.
-
-        Workflow
-        --------
-        1. Validate per-helix CA lengths and set inferred initial dimensions.
-        2. Assemble observed coordinates into shape `(helix_num, residue_num, 3)`.
-        3. Run `fit_cc_by_cccp` to estimate bundle-level parameters.
-        4. Build a bundle local frame from fitted `z` and `y_prototype`.
-        5. Save fitted coordinates as a synthetic CA-only structure for inspection.
-        """
-
+        """把多螺旋束拟合成 CCCP 参数化模型。"""
         def _log(message: str):
             if verbose:
                 print(f"[CCCPHelixBundle.fit] {message}")
@@ -483,10 +419,9 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         helix_lens = []
         for i in range(self.helix_num):
             key = f"helix_{i+1}"
-            helix = self[key]
+            helix = self.atoms(key)
             helix_lens.append(np.sum(helix.atom_name == "CA"))
 
-        # CCCP fitting requires all helices to have the same residue count.
         assert (
             len(set(helix_lens)) == 1
         ), f"All helices must have the same length to fit a CCCP model. Current lengths: {helix_lens}"
@@ -502,15 +437,13 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         )
         for i in range(self.initial_param["helix_num"]):
             key = f"helix_{i+1}"
-            helix = self[key]
+            helix = self.atoms(key)
             ca_mask = helix.atom_name == "CA"
             ca_atoms = helix[ca_mask]
             ca_coord_obs[i] = ca_atoms.coord
-            helix_component: CrickHelix = self.component[key]
+            helix_component: CrickHelix = self[key]
             helix_component.structure = helix
-            # helix_component.fit()
 
-        # Jointly fit all helices into a single CCCP bundle model.
         _log("Running staged CCCP bundle optimization")
         param, rmsd, ca_coord_fitted = fit_cc_by_cccp(
             ca_coord_obs,
@@ -523,15 +456,6 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         z = param["z"]
         y_prototype = param["y_prototype"]
 
-        # Build a right-handed orthonormal frame for the fitted helix bundle.
-        # - z is the fitted bundle axis returned by CCCP.
-        # - y_prototype is an in-plane reference vector used to fix the
-        #   rotation around z; in the generator it points from the bundle
-        #   centroid toward helix_1.
-        # - x is defined as y_prototype x z, so it is perpendicular to the
-        #   bundle axis and the reference radial direction.
-        # - y is then reconstructed as z x x, yielding the final orthonormal
-        #   basis (x, y, z) used by self.xyz.
         _log("Building fitted bundle local frame")
         x = np.cross(y_prototype, z)
         x /= np.linalg.norm(x)
@@ -547,7 +471,6 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
         )
         array_length = ca_coord_fitted.shape[0]
 
-        # Materialize fitted CA coordinates as a synthetic AtomArray.
         fitted_structure = bt_struct.AtomArray(length=array_length)
         fitted_structure.res_name = np.array(["GLY"] * array_length)
         fitted_structure.element = np.array(["C"] * array_length)
@@ -570,10 +493,10 @@ class CCCPHelixBundleOperation(CCCPHelixBundleProperty):
 
 @dataclass
 class CCCPHelixBundle(CCCPHelixBundleIO, CCCPHelixBundleOperation):
-    """
-    A class representing a part of an assembly that is a pure helix.
-    It inherits from AssemblyPart and provides specific functionality for helix parts.
+    """多螺旋 CCCP 束的 Assembly (继承 AssemblyParaRef)。
 
     mask: dict[str, np.ndarray] = field(default_factory=lambda: {})
         Like {"helix_1": None, "helix_2": None, ...}
+    parts: dict[str, CrickHelix]
+        每条螺旋是它的一个子节点 (在 mask 基础上由 push_down 生成)。
     """
