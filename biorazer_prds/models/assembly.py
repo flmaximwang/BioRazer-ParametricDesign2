@@ -132,6 +132,23 @@ class Assembly:
         self.check_part_name(name)
         return self.parts[name]
 
+    def replace_part(self, name, new_part):
+        """用新节点替换子节点 ``name`` (叶 → 特定子类, 如换成 CCCPHelixBundle)。
+
+        重建: 用 ``new_type.from_atomarray(structure=本节点.structure, mask=...)``
+        生成新节点后再替换。父节点的 ``mask[name]`` 保持有效 —— 要求新旧子节点
+        原子数一致 (结构不变, 只是类型/子树不同)。返回 self。
+        """
+        self.check_part_name(name)
+        old_n = len(self.parts[name].structure)
+        new_n = len(new_part.structure)
+        if old_n != new_n:
+            raise ValueError(
+                f"替换节点 '{name}' 原子数不一致: {old_n} != {new_n}"
+            )
+        self.parts[name] = new_part
+        return self
+
     # ------------------------------------------------------------------
     # 坐标访问
     # ------------------------------------------------------------------

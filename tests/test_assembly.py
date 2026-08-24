@@ -343,3 +343,49 @@ class TestSplit:
         leaf.split(m)
         with pytest.raises(ValueError, match="已有子节点"):
             leaf.split({"y": np.array([True] * 4, dtype=bool)})
+
+
+class TestReplacePart:
+    """replace_part(): 把节点重构成特定子类 (如 CCCPHelixBundle) 后替换。"""
+
+    def test_replace_leaf_with_bundle(self):
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        # 构造一个 2 螺旋束 (14 原子, 2 个 CrickHelix 子节点)
+        bun = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=7, backbone_type="CA"
+        )
+        n = len(bun.structure)
+        m1 = np.zeros(n, bool); m1[:7] = True
+        m2 = np.zeros(n, bool); m2[7:] = True
+        bundle = CCCPHelixBundle.from_atomarray(
+            structure=bun.structure, mask={"helix_1": m1, "helix_2": m2}
+        )
+
+        # 父树里一个 14 原子的叶节点 'node'
+        parent = Assembly.from_atomarray(structure=_atoms(20, 0, "A"))
+        m_left = np.zeros(20, bool); m_left[:14] = True
+        m_right = np.zeros(20, bool); m_right[14:] = True
+        parent.split({"node": m_left, "other": m_right})
+        assert parent.parts["node"].parts == {}
+
+        # 重构成 CCCPHelixBundle 并替换
+        parent.replace_part("node", bundle)
+        assert parent.parts["node"] is bundle
+        assert isinstance(parent.parts["node"], CCCPHelixBundle)
+        # 父 mask 保持有效 (选中同样 14 原子区间)
+        assert parent.mask["node"].sum() == 14 and len(parent.mask["node"]) == 20
+
+        # 束可拟合; 父结构仍一致
+        bundle.fit(verbose=False)
+        assert bundle.rmsd is not None
+        parent.merge_up()
+        assert len(parent.structure) == 20
+        assert parent.mask["node"].sum() == 14 and parent.mask["other"].sum() == 6
+
+    def test_replace_atom_count_mismatch_raises(self):
+        parent = Assembly.from_atomarray(structure=_atoms(6, 0, "A"))
+        m = np.zeros(6, bool); m[:4] = True
+        parent.split({"a": m})
+        with pytest.raises(ValueError, match="原子数不一致"):
+            parent.replace_part("a", Assembly(structure=_atoms(99, 0, "A")))
