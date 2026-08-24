@@ -24,3 +24,16 @@ class AssemblyRealRef(Assembly):
             "AssemblyRealRef.xyz: define a frame convention for the real "
             "reference (inertia axes / explicit direction / user frame)."
         )
+
+    def fit(self):
+        """把 ``ref_structure`` 对齐到真实结构 (``structure``), 从而可计算
+        真实结构的 centroid / xyz 等参数。
+
+        真实 ``structure`` 固定为权威; ``ref_structure`` 是可动的, 被配准到
+        真实结构上。对齐后, 用配准后的 ref 的 frame 计算真实结构的
+        centroid / xyz 等参数。目前为占位, 待定义 frame 约定后实现。
+        """
+        raise NotImplementedError(
+            "AssemblyRealRef.fit: define how to align ref_structure onto the "
+            "real structure and derive its frame (centroid/xyz)."
+        )

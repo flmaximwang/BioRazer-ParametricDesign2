@@ -3,7 +3,7 @@
 ref_structure 是 *虚拟* 的: 由拟合参数生成的理想轨迹, 作为放置/注册的参考几何。
 携带参数拟合机制 (``param`` / ``initial_param`` / ``extra_param`` /
 ``params_not_to_fit`` / ``fitted_structure`` / ``rmsd``) 与
-``fit`` / ``fit_with_ref`` / ``modify`` / ``from_params``。
+``fit`` / ``modify`` / ``from_params``。
 """
 
 from abc import abstractmethod
@@ -49,15 +49,13 @@ class AssemblyParaRef(Assembly):
 
     @abstractmethod
     def fit(self, verbose: bool = False):
-        """用给定坐标拟合, 并把参数/rmsd/拟合坐标存入对象。
+        """用给定坐标拟合参数, 并把参数/rmsd/拟合坐标存入对象。
+
+        这是"坐标 → 参数"的拟合 (参数化参考的 fit)。
 
         ``initial_param`` 提供初始猜测; ``params_not_to_fit`` 指定固定参数;
         ``verbose=True`` 打印拟合过程。
         """
-
-    @abstractmethod
-    def fit_with_ref(self):
-        """拟合到参考结构。Ref 是可动的, 原结构固定。"""
 
     @abstractmethod
     def modify(self, method, *args, **kwargs):
