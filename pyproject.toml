@@ -20,3 +20,6 @@ biotite = "*"
 scipy = "^1.16.1"
 numpy = "^2"
 matplotlib = "^3.10.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1.1"
