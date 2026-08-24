@@ -1,3 +1,4 @@
+import copy
 from typing import Iterable, Self
 from dataclasses import dataclass, field
 
@@ -5,6 +6,11 @@ import numpy as np
 import biotite.structure as bt_struct
 
 import biorazer.structure.io as br_struct_io
+from biorazer.database.amino_acid import (
+    AMINO_ACIDS_1LETTER,
+    AMINO_ACIDS_1TO3_UPPER,
+    AMINO_ACIDS_3TO1_UPPER,
+)
 
 from .assembly_para_ref import AssemblyParaRef
 from ..params.helix_cp.generate import generate_helix_ca_by_crick
@@ -158,45 +164,82 @@ class CrickHelix(AssemblyParaRef):
         self.extra_param["helix_type"] = self.calculate_helix_type(self.param["omega"])
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
-    def elongate_with_gly(self, length: int, terminus: str = "C"):
-        """通过添加甘氨酸残基伸长螺旋。
+    def trim_or_extend(self, n: int, terminus: str, resn: str = "GLY"):
+        """在螺旋一端伸长或缩短若干残基 (仅 backbone)。
 
         Parameters
         ----------
-        length : int
-            要添加的残基数 (正整数)。
+        n : int
+            有符号残基数: n > 0 伸长 n 个残基, n < 0 缩短 |n| 个残基。
         terminus : str
-            "N" 为 N 端, "C" 为 C 端, "B" 为两端。
+            "N" 或 "C" (不支持两端)。
+        resn : str
+            新增残基名称 (仅影响伸长部分; 缩短无新增)。单字母或三字母,
+            大小写不敏感; 统一转大写。
+
+        仅支持叶节点; 修改后经 ``replace_with`` 重建祖先 structure/mask。
         """
-        assert (
-            isinstance(length, int) and length > 0
-        ), "Length must be a positive integer."
+        if self.parts:
+            raise ValueError("trim_or_extend 仅支持叶节点")
+        if terminus not in ("N", "C"):
+            raise ValueError(f"terminus 仅支持 'N'/'C', 得到 {terminus!r}")
+        if not isinstance(n, int):
+            raise TypeError(f"n 必须为整数, 得到 {type(n).__name__}")
+        if n == 0:
+            return self
 
-        kwargs = self.param.copy()
-        kwargs["residue_num"] += length * 2
+        if len(resn) == 1:
+            if resn.upper() not in AMINO_ACIDS_1LETTER:
+                raise ValueError(f"无效单字母残基: {resn!r}")
+            resn = AMINO_ACIDS_1TO3_UPPER[resn.upper()]
+        elif len(resn) == 3:
+            if resn not in AMINO_ACIDS_3TO1_UPPER:
+                raise ValueError(f"无效三字母残基: {resn!r}")
+            resn = resn.upper()
+        else:
+            raise ValueError(f"resn 必须为单字母或三字母残基名, 得到 {resn!r}")
 
+        new_structure = (
+            self._extend_terminus(n, resn, terminus)
+            if n > 0
+            else self._trim_terminus(-n, terminus)
+        )
+        new_part = copy.copy(self)
+        new_part.structure = new_structure
+        new_part.param = {
+            **self.param,
+            "residue_num": len(np.unique(new_structure.res_id)),
+        }
+        new_part.ref_structure = None
+        return self.replace_with(new_part)
+
+    def _extend_terminus(self, n: int, resn: str, terminus: str):
+        """在 terminus 端生成 n 个新残基的 backbone (理想 Crick 延伸)。"""
+        residue_num = len(np.unique(self.structure.res_id))
+        kwargs = {**self.param, "residue_num": residue_num + 2 * n}
         helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
-        N_ca = helix_ca[:length]
-        C_ca = helix_ca[-length:]
-        n_terminal_res_id = min(self.structure.res_id)
-        c_terminal_res_id = max(self.structure.res_id)
-        if not terminus in ["N", "C", "B"]:
-            raise ValueError(f"Unsupported terminus: {terminus}")
-        if terminus in ["N", "B"]:
-            new_structure = ca_xyz_to_atom_array(
-                N_ca, chain_id_i=self.structure.chain_id[0]
-            )
-            n_terminal_res_id = min(self.structure.res_id)
-            new_structure.res_id += n_terminal_res_id - 1 - length
-            self.structure = bt_struct.concatenate([new_structure, self.structure])
-        if terminus in ["C", "B"]:
-            new_structure = ca_xyz_to_atom_array(
-                C_ca, chain_id_i=self.structure.chain_id[0]
-            )
-            c_terminal_res_id = max(self.structure.res_id)
-            new_structure.res_id += c_terminal_res_id
-            self.structure = bt_struct.concatenate([self.structure, new_structure])
-        self.structure = pulchra_fix_backbone(self.structure)
+        new_ca = helix_ca[:n] if terminus == "N" else helix_ca[-n:]
+        new_structure = ca_xyz_to_atom_array(
+            new_ca, chain_id_i=self.structure.chain_id[0], res_name=resn
+        )
+        res_ids = np.unique(self.structure.res_id)
+        offset = min(res_ids) - 1 - n if terminus == "N" else max(res_ids)
+        new_structure.res_id += offset
+        combined = (
+            bt_struct.concatenate([new_structure, self.structure])
+            if terminus == "N"
+            else bt_struct.concatenate([self.structure, new_structure])
+        )
+        return pulchra_fix_backbone(combined)
+
+    def _trim_terminus(self, n: int, terminus: str):
+        """从 terminus 端删除 n 个残基。"""
+        res_ids = self.structure.res_id
+        unique_res = np.unique(res_ids)
+        if n >= len(unique_res):
+            raise ValueError(f"无法缩短 {n} 个残基: 螺旋仅 {len(unique_res)} 个残基")
+        keep = unique_res[n:] if terminus == "N" else unique_res[:-n]
+        return self.structure[np.isin(res_ids, keep)]
 
 
 @dataclass
