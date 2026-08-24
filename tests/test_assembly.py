@@ -473,6 +473,98 @@ class TestRotateRotvec:
             a.rotate_rotvec([0, 0, 0], [0, 0, 0], 1.0)
 
 
+class _CnProbe(Assembly):
+    """calculate_Cn_among 的最小具体探针: centroid=CA 质心, xyz=自定义正交帧。
+
+    C3+ 的轴方向由质心 SVD 求得 (不需 xyz); xyz 仅在 C2 时兜底使用。因此这里
+    xyz 存一个固定帧即可, 无需依赖 helix 拟合。
+    """
+
+    def __init__(self, structure, axes=None):
+        super().__init__(structure=structure)
+        self._axes = np.eye(3) if axes is None else np.asarray(axes, float)
+
+    @property
+    def xyz(self):
+        return self._axes
+
+
+def _cn_generator(n, coords, axis_point, axis_dir):
+    """生成 n 个绕 axis (axis_point, axis_dir) 相隔 2π/n 旋转的对称副本。"""
+    base = _CnProbe(_atoms_from_coords(coords))
+    out = []
+    for k in range(n):
+        c = base.copy()
+        c.rotate_rotvec(axis_point, axis_dir, k * 2 * np.pi / n)
+        out.append(c)
+    return out
+
+
+def _atoms_from_coords(coords):
+    a = bt_struct.AtomArray(len(coords))
+    a.coord = np.asarray(coords, dtype=float)
+    a.atom_name = np.array(["CA"] * len(coords))
+    a.res_id = np.arange(1, len(coords) + 1)
+    a.chain_id = np.array(["A"] * len(coords))
+    a.element = np.array(["C"] * len(coords))
+    return a
+
+
+_CN_COORDS = [[0, 0, 0], [2, 1, 0], [0, 2, 1], [1, 1, 2], [-2, 0, 3]]
+_CN_AXIS_POINT = np.array([3.0, -2.0, 5.0])
+_CN_AXIS_DIR = np.array([1.0, 1.0, 1.0])
+_CN_AXIS_DIR = _CN_AXIS_DIR / np.linalg.norm(_CN_AXIS_DIR)
+
+
+class TestCalculateCnAmong:
+    """calculate_Cn_among: 骨架/全原子 RMSD, 总原子数不同的兜底与报错。"""
+
+    def test_c3_exact_symmetry_recovers_axis_and_zero_rmsd(self):
+        copies = _cn_generator(3, _CN_COORDS, _CN_AXIS_POINT, _CN_AXIS_DIR)
+        res = Assembly.calculate_Cn_among(copies, bb_rmsd=True)
+        # 轴方向恢复 (误差 < 1e-3)
+        assert abs(float(np.dot(res["axis_direction"], _CN_AXIS_DIR))) > 1 - 1e-3
+        # 严格对称: 旋转后与目标一致, RMSD ≈ 0
+        np.testing.assert_allclose(res["rmsd"], [0, 0], atol=1e-4)
+
+    def test_bb_rmsd_false_also_recovers_same_atom_count(self):
+        copies = _cn_generator(3, _CN_COORDS, _CN_AXIS_POINT, _CN_AXIS_DIR)
+        res = Assembly.calculate_Cn_among(copies, bb_rmsd=False)
+        np.testing.assert_allclose(res["rmsd"], [0, 0], atol=1e-4)
+
+    def test_bb_rmsd_true_tolerates_differing_total_atom_count(self):
+        """总原子数不同 (多一个侧链 H) 但骨架一致: bb_rmsd=True 不报错, RMSD≈0。"""
+        copies = _cn_generator(3, _CN_COORDS, _CN_AXIS_POINT, _CN_AXIS_DIR)
+        extra = bt_struct.AtomArray(1)
+        extra.coord = np.array([[1.0, 1.0, 1.0]])
+        extra.atom_name = np.array(["HE1"])
+        extra.res_id = np.array([1])
+        extra.chain_id = np.array(["A"])
+        extra.element = np.array(["H"])
+        mixed = copies[0].copy()
+        mixed2 = copies[1].copy()
+        mixed2.structure = bt_struct.concatenate([mixed2.structure, extra])
+        mixed3 = copies[2].copy()
+        res = Assembly.calculate_Cn_among([mixed, mixed2, mixed3], bb_rmsd=True)
+        np.testing.assert_allclose(res["rmsd"], [0, 0], atol=1e-4)
+
+    def test_bb_rmsd_false_raises_on_differing_atom_count(self):
+        """全原子 (bb_rmsd=False) 且原子数不同 → 显式报错, 而非广播得出错误 RMSD。"""
+        copies = _cn_generator(3, _CN_COORDS, _CN_AXIS_POINT, _CN_AXIS_DIR)
+        extra = bt_struct.AtomArray(1)
+        extra.coord = np.array([[1.0, 1.0, 1.0]])
+        extra.atom_name = np.array(["HE1"])
+        extra.res_id = np.array([1])
+        extra.chain_id = np.array(["A"])
+        extra.element = np.array(["H"])
+        mixed = copies[0].copy()
+        mixed2 = copies[1].copy()
+        mixed2.structure = bt_struct.concatenate([mixed2.structure, extra])
+        mixed3 = copies[2].copy()
+        with pytest.raises(ValueError, match="原子数不一致"):
+            Assembly.calculate_Cn_among([mixed, mixed2, mixed3], bb_rmsd=False)
+
+
 class TestCCCPCenterConvergence:
     """CCCPHelixBundle.center() 在含子节点的束上应能收敛。
 

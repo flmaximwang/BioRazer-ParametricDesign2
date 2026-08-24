@@ -449,7 +449,7 @@ class Assembly:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def calculate_Cn_among(assemblies, atol=1e-3):
+    def calculate_Cn_among(assemblies, bb_rmsd=True, atol=1e-3):
         """计算 ``assemblies`` 中 N 个 Assembly 之间的 Cn 对称轴, 并给出把
         Assembly 0 绕该轴旋转到其它 Assembly 的 RMSD (用于校验对称性)。
 
@@ -469,14 +469,21 @@ class Assembly:
           可直接由 SVD 得到; 若检测到退化质心环 (共线/共点), 抛 ``ValueError``
           而非静默兜底。
         - **RMSD**: 固定 Assembly 0 为参考, 对每个 j = 1..N-1, 把 Assembly 0
-          绕已求得的轴旋转 ``j·2π/N``, 与 Assembly j 逐原子计算原始 RMSD
-          (原子顺序需一一对应, 如对称副本)。严格 Cn 对称时 RMSD ≈ 0。
+          绕已求得的轴旋转 ``j·2π/N``, 用 biotite 的 ``rmsd`` API (不再手写)
+          与 Assembly j 计算原始 RMSD (原子按序一一对应, 如对称副本)。
+          ``bb_rmsd=True`` 时只取骨架原子 (N/CA/C/O) 参与 —— 允许总原子数
+          不同的 Assembly (侧链/建模细节不同) 只要骨架原子集一致即可正常比对。
+          严格 Cn 对称时 RMSD ≈ 0。
 
         Parameters
         ----------
         assemblies : sequence[Assembly]
-            N 个 cn 对称排布的 Assembly (N ≥ 2)。所有 assembly 的原子数须一致
-            (对称副本), 否则无法逐原子比较 RMSD。
+            N 个 cn 对称排布的 Assembly (N ≥ 2)。``bb_rmsd=True`` 时各 Assembly
+            只需骨架原子集一致 (总原子数可不同); ``bb_rmsd=False`` 时总原子数
+            须一致。
+        bb_rmsd : bool
+            True (默认): RMSD 只在 N/CA/C/O 骨架上计算; False: 全原子。骨架/
+            原子集数量不一致时抛 ``ValueError`` (而非广播静默产生错误值)。
         atol : float
             SVD 判定质心环是否退化的容差 (仅影响轴方向的兜底选择)。
 
@@ -508,13 +515,6 @@ class Assembly:
                     "Each assembly must define an xyz frame (3x3) "
                     f"(got {xyz!r})."
                 )
-        n_atoms = {len(a.structure) for a in arrs}
-        if len(n_atoms) != 1:
-            raise ValueError(
-                "calculate_Cn_among requires all assemblies to have the same "
-                f"atom count to compute pairwise RMSD (got {sorted(n_atoms)})."
-            )
-
         # 轴上一点: N 个 Cn 对称排布的质心到轴等距且落在同一垂直于轴的平面内,
         # 故质心环圆心 = 各质心均值 位于对称轴上。
         centroids = np.asarray([a.centroid for a in arrs], dtype=float)
@@ -557,20 +557,48 @@ class Assembly:
         axis_direction = axis_direction / np.linalg.norm(axis_direction)
 
         # RMSD: 参考 = Assembly 0; 对 j = 1..N-1, 把 Assembly 0 绕轴旋转
-        # j·2π/N 后与 Assembly j 逐原子比较 (原始 RMSD, 不再最优叠合)。
-        ref_coord = np.asarray(arrs[0].structure.coord, dtype=float)
+        # j·2π/N 后与 Assembly j 比较 (原始 RMSD, 不再最优叠合); 用 biotite 的
+        # ``rmsd`` API 计算。bb_rmsd=True 时只取 N/CA/C/O 骨架原子, 允许总原子数
+        # 不同的 Assembly (侧链/建模细节不同) 只要骨架原子集一致即可比对; 骨架/
+        # 原子集数量不一致时显式报错, 杜绝广播静默产生错误 RMSD。
+        def _rmsd_coords(a, bb):
+            st = a.structure
+            if bb:
+                out = st[np.isin(st.atom_name, ["N", "CA", "C", "O"])]
+                if len(out) == 0:
+                    raise ValueError(
+                        "calculate_Cn_among: bb_rmsd=True 但 Assembly 找不到 "
+                        f"骨架原子 (N/CA/C/O), 共 {len(st)} 个原子。"
+                    )
+                return out.coord
+            return np.asarray(st.coord, dtype=float)
+
+        ref_coord = _rmsd_coords(arrs[0], bb_rmsd)
+
+        # 校验所有参与 RMSD 的坐标集数量与参考一致, 保证后续旋转比较形状对齐;
+        # 不一致者显式报错, 杜绝 numpy 广播静默算出错误值或抛晦涩广播错误。
+        for j in range(1, n):
+            if len(_rmsd_coords(arrs[j], bb_rmsd)) != len(ref_coord):
+                raise ValueError(
+                    "calculate_Cn_among: 参与 RMSD 比较的原子数不一致 "
+                    f"(Assembly 0 有 {len(ref_coord)} 个, Assembly {j} 有 "
+                    f"{len(_rmsd_coords(arrs[j], bb_rmsd))} 个, "
+                    f"bb_rmsd={bb_rmsd})。bb_rmsd=True 时需各 Assembly 骨架原子"
+                    "集一致; bb_rmsd=False 时需总原子数一致, 且原子需按序一一对应。"
+                )
 
         # 固定轴方向符号 (SVD 平面法向符号任意): 使绕轴 ``+2π/N`` 能把
         # Assembly 0 转到**下一个** Assembly (1) 而非上一个 (N-1)。否则 RMSD
         # 会把相邻对称伙伴旋转到反方向, 即使严格对称也会得到很大的值。
+        # 用与 RMSD 一致的坐标子集比较, 避免总原子数不同时形状不匹配。
         if n > 2:
             cand = axis_direction
             plus = R.from_rotvec(2 * np.pi / n * cand).apply(
                 ref_coord - axis_point
             ) + axis_point
-            d_next = np.mean(np.sum((plus - arrs[1].structure.coord) ** 2, axis=1))
+            d_next = np.mean(np.sum((plus - _rmsd_coords(arrs[1], bb_rmsd)) ** 2, axis=1))
             d_prev = np.mean(np.sum(
-                (plus - arrs[n - 1].structure.coord) ** 2, axis=1
+                (plus - _rmsd_coords(arrs[n - 1], bb_rmsd)) ** 2, axis=1
             ))
             if d_prev < d_next:
                 axis_direction = -axis_direction
@@ -580,10 +608,16 @@ class Assembly:
             moved = R.from_rotvec(j * 2 * np.pi / n * axis_direction).apply(
                 ref_coord - axis_point
             ) + axis_point
-            target = np.asarray(arrs[j].structure.coord, dtype=float)
-            rmsd[j - 1] = np.sqrt(
-                np.mean(np.sum((moved - target) ** 2, axis=1))
-            )
+            target = _rmsd_coords(arrs[j], bb_rmsd)
+            if len(target) != len(moved):
+                raise ValueError(
+                    "calculate_Cn_among: 参与 RMSD 比较的原子数不一致 "
+                    f"(Assembly 0 有 {len(moved)} 个, Assembly {j} 有 "
+                    f"{len(target)} 个, bb_rmsd={bb_rmsd})。bb_rmsd=True 时需 "
+                    "各 Assembly 骨架原子集一致; bb_rmsd=False 时需总原子数一"
+                    "致, 且原子需按序一一对应。"
+                )
+            rmsd[j - 1] = bt_struct.rmsd(moved, target)
 
         return {
             "axis_point": axis_point,
