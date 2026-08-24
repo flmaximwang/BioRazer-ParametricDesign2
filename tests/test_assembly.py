@@ -615,6 +615,97 @@ class TestCCCPCenterConvergence:
         assert not np.allclose(np.asarray(bundle.xyz[2]), before, atol=1e-2)
 
 
+class TestCCCPTrimOrExtend:
+    """CCCPHelixBundle.trim_or_extend: 用束参数伸长/缩短单根螺旋, 重建束结构。"""
+
+    @staticmethod
+    def _make_bundle(residue_num=7):
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        base = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=residue_num, centroid=[0, 0, 0],
+            y_prototype=[0, 1, 0], z=[0, 0, 1], backbone_type="CA",
+        )
+        S = base.structure
+        n = len(S) // 2
+        m1 = np.zeros(len(S), bool); m1[:n] = True
+        m2 = np.zeros(len(S), bool); m2[n:] = True
+        bundle = CCCPHelixBundle.from_atomarray(structure=S, mask={"h1": m1, "h2": m2})
+        bundle.fit()  # 填充束参数 (伸长几何由这些拟合参数生成)
+        return bundle
+
+    def test_extend_helix0_nterm_uses_bundle_param(self):
+        bundle = self._make_bundle()
+        h0_before = bundle.parts["h1"].structure.coord.copy()
+        h1_before = bundle.parts["h2"].structure.coord.copy()
+        new_len = len(np.unique(bundle.parts["h1"].structure.res_id)) + 2
+
+        result = bundle.trim_or_extend(0, 2, "N")
+
+        # 束结构被重建, helix 0 变长 2, helix 1 不变
+        assert result is bundle.parts["h1"]
+        assert len(np.unique(bundle.parts["h1"].structure.res_id)) == new_len
+        assert len(np.unique(bundle.parts["h2"].structure.res_id)) == new_len - 2
+        np.testing.assert_allclose(
+            bundle.parts["h2"].structure.coord, h1_before, atol=1e-12
+        )
+        # 新增 N 端残基在质心 z 更负的一端 (沿 +z 前进, N 端在 -z)
+        z_min_old = h0_before[:, 2].min()
+        assert bundle.parts["h1"].structure.coord[:, 2].min() < z_min_old
+
+    def test_extend_helix1_cterm(self):
+        bundle = self._make_bundle()
+        h0_before = bundle.parts["h1"].structure.coord.copy()
+        new_len = len(np.unique(bundle.parts["h2"].structure.res_id)) + 3
+
+        bundle.trim_or_extend(1, 3, "C")
+        assert len(np.unique(bundle.parts["h2"].structure.res_id)) == new_len
+        # helix 0 不受影响
+        np.testing.assert_allclose(
+            bundle.parts["h1"].structure.coord, h0_before, atol=1e-12
+        )
+        # C 端新残基在 +z 更远端
+        z_max_old = h0_before[:, 2].max()
+        assert bundle.parts["h2"].structure.coord[:, 2].max() >= z_max_old
+
+    def test_trim_helix(self):
+        bundle = self._make_bundle()
+        h1_before = bundle.parts["h2"].structure.coord.copy()
+        new_len = len(np.unique(bundle.parts["h1"].structure.res_id)) - 2
+
+        bundle.trim_or_extend(0, -2, "C")
+        assert len(np.unique(bundle.parts["h1"].structure.res_id)) == new_len
+        np.testing.assert_allclose(
+            bundle.parts["h2"].structure.coord, h1_before, atol=1e-12
+        )
+
+    def test_validation_errors(self):
+        bundle = self._make_bundle()
+        with pytest.raises(IndexError, match="越界"):
+            bundle.trim_or_extend(5, 1, "N")
+        with pytest.raises(ValueError, match="terminus"):
+            bundle.trim_or_extend(0, 1, "X")
+        with pytest.raises(TypeError, match="整数"):
+            bundle.trim_or_extend(0, 1.5, "N")
+        # 缩短到不足 1 个残基
+        with pytest.raises(ValueError, match="无法缩短"):
+            bundle.trim_or_extend(0, -7, "N")
+
+    def test_extend_missing_params_raises(self):
+        bundle = self._make_bundle()
+        bundle.param = {"residue_num": 7}  # 破坏参数完整性
+        with pytest.raises(ValueError, match="缺少"):
+            bundle.trim_or_extend(0, 2, "N")
+
+    def test_leaf_bundle_raises(self):
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        leaf = CCCPHelixBundle.from_param(helix_num=2, residue_num=7)
+        assert not leaf.parts
+        with pytest.raises(ValueError, match="子螺旋"):
+            leaf.trim_or_extend(0, 1, "N")
+
+
 class TestReplaceWith:
     """replace_with(): 用新块替换本节点, 重建本节点及以上所有祖先的 structure/mask。"""
 
