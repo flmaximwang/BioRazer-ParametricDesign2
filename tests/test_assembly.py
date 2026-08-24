@@ -300,6 +300,26 @@ class TestFromAtomArray:
         r = Assembly.from_atomarray(structure=_atoms(4, 0, "A"), ref_structure=rs)
         assert r.ref_structure is rs
 
+    def test_uncovered_atoms_raise(self):
+        # 所有 mask 取 or 后仍留有 False => 未被任何子 assembly 覆盖 => 抛错
+        m1 = np.array([True, True, True, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, False], dtype=bool)  # 第 5 原子未覆盖
+        with pytest.raises(ValueError, match="未完全覆盖"):
+            Assembly.from_atomarray(structure=_atoms(5, 0, "A"), mask={"a": m1, "b": m2})
+
+    def test_nested_full_coverage_passes(self):
+        # 嵌套 dict 递归展开后 or 完全覆盖 (含跨层互补) 则正常构建
+        m11 = np.array([True, True, False, False, False], dtype=bool)
+        m12 = np.array([False, False, True, False, False], dtype=bool)
+        m2 = np.array([False, False, False, True, True], dtype=bool)
+        root = Assembly.from_atomarray(
+            structure=_atoms(5, 0, "A"),
+            mask={"grp": {"x": m11, "y": m12}, "b": m2},
+        )
+        assert set(root.parts) == {"grp", "b"}
+        assert len(root.parts["grp"].structure) == 3
+        assert len(root.parts["b"].structure) == 2
+
 
 class TestSplit:
     """split(): 把已构造的叶节点继续拆分为子树。"""

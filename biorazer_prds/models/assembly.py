@@ -461,9 +461,34 @@ class Assembly:
         输入 ``mask`` 中所有布尔数组都等长于顶层 ``structure``; dict 的嵌套
         即树的拓扑。构建出的每个节点所存 ``mask`` 是其自身 structure 上的
         掩码 (长度 = 该节点原子数)。
+
+        新架构不变式: 当 ``mask`` 是 dict 时, 所有 (递归展开的) 掩码取 or
+        后必须完全覆盖 ``structure`` (不能有 False)。若存在未被任何子
+        assembly 覆盖的原子, 抛出 ``ValueError`` — 内部 Assembly 必须被
+        所有子 assembly 完全覆盖。
         """
         obj = cls(structure=structure, ref_structure=ref_structure)
         if mask != "all":
+            # 新架构不变式: 内部 Assembly 必须被所有子 assembly 完全覆盖 —
+            # 所有 (递归展开的) 掩码取 or 后不能有 False 存在。
+            coverage = np.zeros(len(structure), dtype=bool)
+
+            def _collect(m):
+                nonlocal coverage
+                for v in m.values():
+                    if isinstance(v, dict):
+                        _collect(v)
+                    else:
+                        coverage |= v
+
+            _collect(mask)
+            if not coverage.all():
+                missing = np.flatnonzero(~coverage)
+                raise ValueError(
+                    "from_atomarray 的 mask 未完全覆盖 structure: "
+                    f"{len(missing)} 个原子未被任何子 assembly 覆盖"
+                    f" (未覆盖索引前 10 个: {missing[:10].tolist()})"
+                )
             indices = np.arange(len(structure))
             obj._build_subtree(mask, indices)
         return obj
