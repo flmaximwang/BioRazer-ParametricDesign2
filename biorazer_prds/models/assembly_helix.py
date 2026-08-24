@@ -53,10 +53,10 @@ class CrickHelixProperty(Helix):
 
     @property
     def xyz(self):
-        if not self._xyz:
+        if self._xyz is None:
             self.fit()
             self._xyz = np.vstack(
-                self.extra_param["x"], self.extra_param["y"], self.extra_param["z"]
+                (self.extra_param["x"], self.extra_param["y"], self.extra_param["z"])
             )
         return self._xyz
 
