@@ -23,3 +23,9 @@ matplotlib = "^3.10.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1.1"
+
+# 可选依赖: PyRosetta。注意 PyRosetta 因许可证不在 PyPI 上, 无法通过
+# pip/poetry 自动解析; 需先用 conda (RosettaCommons 频道) 或官方 wheel
+# 自行安装, 见 https://www.pyrosetta.org/downloads。此 extra 仅作意图声明。
+[tool.poetry.extras]
+pyrosetta = ["pyrosetta"]
