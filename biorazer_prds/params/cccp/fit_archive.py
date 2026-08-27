@@ -92,7 +92,7 @@ def fit_helix_by_crick(
     initial_params=dict(
         radius=2.26,
         omega=4 * np.pi / 7,
-        pitch_angle=0.876,
+        pitch_angle=0.358,
         phi0=0.0,
     ),
 ):

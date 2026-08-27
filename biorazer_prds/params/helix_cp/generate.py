@@ -8,7 +8,7 @@ def generate_helix_ca_by_crick(
     direction: Iterable[float] = (0.0, 0.0, 1.0),
     radius: float = 2.26,
     omega: float = 4 * np.pi / 7,
-    pitch_angle: float = 0.876,
+    pitch_angle: float = 0.358,
     phi0: float = 0.0,
 ):
     """
