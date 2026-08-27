@@ -5,4 +5,5 @@ __pycache__
 poetry.lock
 AGENTS.md
 .worktree
+.worktrees
 uv.lock
