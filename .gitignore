@@ -1,9 +1,18 @@
-test
-__pycache__
-*.pyc
-.vscode/
-poetry.lock
+# Agent Configurations
 AGENTS.md
+.hermes
+
+# IDE
+.vscode
+
+# Git
 .worktree
 .worktrees
+
+# Build Systems
+poetry.lock
 uv.lock
+
+# Python
+__pycache__
+*.pyc
