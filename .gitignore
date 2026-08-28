@@ -1,18 +1,2 @@
-# Agent Configurations
-AGENTS.md
-.hermes
-
-# IDE
-.vscode
-
-# Git
-.worktree
-.worktrees
-
-# Build Systems
-poetry.lock
-uv.lock
-
-# Python
-__pycache__
-*.pyc
+# 忽略演示用 PDB 输出 (目视检查产物, 不入库)
+demo_pdbs/
