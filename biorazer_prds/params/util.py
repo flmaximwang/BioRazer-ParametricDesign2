@@ -47,13 +47,19 @@ def build_bb_chain_ic(n_res, resn="GLY", ss="alpha-helix", start_res=1,
         nxt = build_template(resn, ss, "canonical")
         nxt.res_id = [start_res + r - 1] * len(nxt)
         nxt.chain_id = [chain_id] * len(nxt)
+        # 既有链末残基的 N/CA/C (不能按固定偏移取: 非 GLY 残基带侧链原子)
+        last_rid = max(a.res_id for a in ic.atoms)
+        last = {}
+        for i, a in enumerate(ic.atoms):
+            if a.res_id == last_rid:
+                last[a.name] = i
         merged = connect_internal_coords(
-            ic, nxt, C_index=len(ic) - 2, N_index=0
+            ic, nxt, C_index=last["C"], N_index=0
         )
         off = len(ic)
         # 连接处: psi (N_i, CA_i, C_i, N_j), phi (C_i, N_j, CA_j, C_j)
-        merged.dihedra[(off - 4, off - 3, off - 2, off)] = psi_t
-        merged.dihedra[(off - 2, off, off + 1, off + 2)] = phi_t
+        merged.dihedra[(last["N"], last["CA"], last["C"], off)] = psi_t
+        merged.dihedra[(last["C"], off, off + 1, off + 2)] = phi_t
         # 只保留 N-terminal (既有链) 的 anchor
         merged.anchor = {k: v for k, v in merged.anchor.items() if k < off}
         ic = merged
@@ -104,7 +110,12 @@ def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
     ref_ic = build_bb_chain_ic(n_new + 1, resn=ic_new.atoms[0].res_name,
                                ss=ss, start_res=1, chain_id="A")
     ref_coords = ref_ic.to_coords()
-    m = len(ref_ic)
+    ref_rids = np.array([a.res_id for a in ref_ic.atoms])
+    last_rid_ref = n_new + 1
+    last_ref = {}
+    for i, a in enumerate(ref_ic.atoms):
+        if a.res_id == last_rid_ref:
+            last_ref[a.name] = i
 
     if terminus == "C":
         # 参考链首残基对齐到既有链末残基; 新片段 = 参考链残基 2..n_new+1
@@ -123,8 +134,8 @@ def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
             np.asarray(coords_old[C_i], float),
         ])
         R, t = _kabsch(P, Q)
-        # 取参考链原子 4..(4*(n_new+1)) 的前 n_atoms_new 个
-        start = 4
+        # 新片段原子 = 参考链中非首残基的原子 (残基 2..n_new+1)
+        sel = np.where(ref_rids != 1)[0][:n_atoms_new]
     else:
         # 参考链末残基对齐到既有链首残基; 新片段 = 参考链残基 1..n_new
         rid_old = min(old_res)
@@ -132,9 +143,9 @@ def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
         CA_i = old_res[rid_old]["CA"]
         C_i = old_res[rid_old]["C"]
         P = np.stack([
-            np.asarray(ref_coords[m - 4], float),
-            np.asarray(ref_coords[m - 3], float),
-            np.asarray(ref_coords[m - 2], float),
+            np.asarray(ref_coords[last_ref["N"]], float),
+            np.asarray(ref_coords[last_ref["CA"]], float),
+            np.asarray(ref_coords[last_ref["C"]], float),
         ])
         Q = np.stack([
             np.asarray(coords_old[N_i], float),
@@ -142,10 +153,11 @@ def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
             np.asarray(coords_old[C_i], float),
         ])
         R, t = _kabsch(P, Q)
-        start = 0
+        # 新片段原子 = 参考链中非末残基的原子 (残基 1..n_new)
+        sel = np.where(ref_rids != last_rid_ref)[0][:n_atoms_new]
 
     new_xyz = np.array(
-        [R @ np.asarray(ref_coords[i], float) + t for i in range(start, start + n_atoms_new)]
+        [R @ np.asarray(ref_coords[i], float) + t for i in sel]
     )
     ic_new.anchor[0] = tuple(new_xyz[0])
     ic_new.anchor[1] = tuple(new_xyz[1])
