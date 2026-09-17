@@ -16,3 +16,6 @@ uv.lock
 # Python
 __pycache__
 *.pyc
+
+# Demo outputs
+biorazer_prds/scripts/*_fit.pdb

@@ -6,7 +6,7 @@ import numpy as np
 import biotite.structure as bt_struct
 
 import biorazer.structure.io as br_struct_io
-from biorazer.database.amino_acid import (
+from biorazer.database.alphabet import (
     AMINO_ACIDS_1LETTER,
     AMINO_ACIDS_1TO3_UPPER,
     AMINO_ACIDS_3TO1_UPPER,
@@ -17,7 +17,14 @@ from ..params.helix_cp.generate import generate_helix_ca_by_crick
 from ..params.helix_cp.fit import fit_helix_by_crick
 from ..params.cccp.generate import generate_cc_ca_by_cccp
 from ..params.cccp.fit import fit_cc_by_cccp
-from ..params.util import ca_xyz_to_atom_array, pulchra_fix_backbone
+from ..params.util import (
+    ca_xyz_to_atom_array,
+    pulchra_fix_backbone,
+    build_bb_chain_ic,
+    build_bb_chain_following_ca,
+    connect_ic_fragments,
+    _sync_fragment_dihedrals,
+)
 
 
 @dataclass
@@ -201,12 +208,9 @@ class CrickHelix(AssemblyParaRef):
 
         new_part = copy.copy(self)
         if n > 0:
-            new_part.add_atoms(self._extend_fragment(n, resn, terminus))
-            # 补全 backbone, 使新残基与既有链的 junction 正确; pulchra 保留
-            # res_id, 再按 res_id 稳定排序使 N 端新增残基回到链首。
-            new_part.structure = pulchra_fix_backbone(new_part.structure)
-            order = np.argsort(new_part.structure.res_id, kind="stable")
-            new_part.structure = new_part.structure[order]
+            new_part.structure = self._extend_backbone_internal_coord(
+                n, resn, terminus
+            )
         else:
             new_part.remove_atoms(self._trim_mask(-n, terminus))
         new_part.param = {
@@ -215,6 +219,88 @@ class CrickHelix(AssemblyParaRef):
         }
         new_part.ref_structure = None
         return self.replace_with(new_part)
+
+    def _extend_backbone_internal_coord(self, n: int, resn: str, terminus: str):
+        """内坐标方式在 terminus 端伸长 n 个残基 (替代 CA+pulchra 重建)。
+
+        新残基 backbone 由 biorazer 内坐标模板 (build_template, alpha-helix
+        化学理想键长/键角) 构建并 connect 到既有链; 再对 backbone 的
+        phi/psi/omega 分阶段优化 (psi/phi 先行, 后全部), 使新残基 CA 在
+        alpha-helix 允许范围内尽量贴近 Crick 拟合轨迹外推的目标 CA。
+
+        Returns
+        -------
+        bt_struct.AtomArray
+            伸长后的完整结构 (按 res_id 升序; N 端新残基在链首)。
+        """
+        from biorazer.structure.objects.internal_coords import InternalCoord
+
+        # 0) IC 连接需要既有链的**化学合理** backbone (N/CA/C/O): 合并后
+        #    to_coords 会从新片段理想几何外推既有链首残基原子, 既有链几何
+        #    若与模板不符 (如 pulchra 从 6Å 螺旋重建的畸变 backbone) 会在
+        #    连接点不一致而报错。纯 CA-only 链 (如 from_param(backbone_type
+        #    ="CA")) 根本没有可连接的 backbone —— 保持 CA-only, 只追加
+        #    Crick 外推的新 CA (与旧 _extend_fragment 同法); 完整 backbone
+        #    输入才走内坐标流程 (既有链完全不动, 新残基由 IC 模板构建)。
+        structure = self.structure
+        if not {"N", "C", "O"} <= set(structure.atom_name):
+            extended = bt_struct.concatenate([
+                structure, self._extend_fragment(n, resn, terminus)
+            ])
+            order = np.argsort(extended.res_id, kind="stable")
+            return extended[order]
+
+        # 1) 目标 CA: 拟合轨迹外推 n 个残基 (与 _extend_fragment 同法)
+        required = {
+            "residue_num", "centroid", "direction", "radius",
+            "omega", "pitch_angle", "phi0",
+        }
+        missing = required - set(self.param)
+        if missing:
+            raise ValueError(
+                "trim_or_extend 伸长需要完整 Crick 参数, 缺少 "
+                f"{sorted(missing)}; 请先调用 fit() 拟合参数"
+            )
+        residue_num = len(np.unique(structure.res_id))
+        kwargs = {**self.param, "residue_num": residue_num + 2 * n}
+        helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
+        target_ca = helix_ca[:n] if terminus == "N" else helix_ca[-n:]
+
+        # 2) 既有链 -> InternalCoord (anchor 在链首, 全链由实测几何决定)
+        ic_old = InternalCoord.from_atomarray(structure)
+
+        # 3) 参考链 (n+1 残基, 含对齐残基) 跟随 Crick 目标 CA 解出二面角
+        #    (连接前在片段自身坐标系完成, demo 同法); 新片段 = 参考链的对
+        #    应残基, 二面角从参考链同步 (只解一次, 避免两个 least_squares
+        #    因刚体自由度解不唯一而失配)
+        chain_id0 = structure.chain_id[0]
+        res_ids = np.unique(structure.res_id)
+        if terminus == "N":
+            start_res = int(min(res_ids)) - n
+        else:
+            start_res = int(max(res_ids)) + 1
+        ref_ca = helix_ca[-(n + 1):] if terminus == "C" else helix_ca[:n + 1]
+        ref_ic = build_bb_chain_following_ca(
+            ref_ca, resn=resn, ss="alpha-helix", start_res=1, chain_id="A",
+        )
+        ic_new = build_bb_chain_ic(
+            n, resn=resn, ss="alpha-helix",
+            start_res=start_res, chain_id=chain_id0,
+        )
+        _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus)
+
+        # 4) 连接 (两段 anchor 保留, 连接处 omega 实测; N/C 端语义见
+        #    connect_ic_fragments: C 端 merged=[既有链][新片段], N 端
+        #    merged=[新片段][既有链])。ref_ic 提供放置参考 (Crick 跟随),
+        #    使放置后片段 CA 精确贴住 Crick 轨迹, 连接后无需再优化
+        #    (两端对称)。
+        merged = connect_ic_fragments(ic_old, ic_new, ss="alpha-helix",
+                                      terminus=terminus, ref_ic=ref_ic)
+
+        # 5) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
+        new_structure = merged.to_atomarray()
+        order = np.argsort(new_structure.res_id, kind="stable")
+        return new_structure[order]
 
     def _extend_fragment(self, n: int, resn: str, terminus: str):
         """生成 terminus 端 n 个新残基的 CA (理想 Crick 延伸), 供 add_atoms 追加。"""
