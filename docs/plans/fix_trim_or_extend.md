@@ -105,18 +105,16 @@ build_template 硬编码 carbonyl O 的 (N, CA, C, O) dihedral = 180.0
 
 ### 1. demo 脚本收尾 (biorazer_prds/scripts/demo_crick_100_phipsi.py)
 
-当前版本:
-- 用 omega=100° Crick 生成 ground truth (但 pitch=0.876 错误, CA-CA=5.86Å)
-- 联合优化锚点刚体 (6 自由度) + 全部 phi/psi, RMSD 4.31 Å, 二面角非物理
-- 用户指出: 3 个锚点之间需加 blen (N-CA, CA-C) 和 bang (N-CA-C) 约束,
-  自由度会适当减少
+**已完成 (2026-09-17)**。修正:
+- ground truth 改用正确 pitch_angle=0.378 (CA-CA=3.80 Å)
+- 锚点 9 自由度 (N1/CA1/C1 坐标) + blen/bang 高权重残差 (权重 100+)
+- phi/psi alpha-helix 物理范围约束 (phi∈[-85,-35], psi∈[-75,-15])
+- carbonyl O 跟踪 psi: dihedral(N,CA,C,O) = psi - 180 (trans 肽平面)
 
-待做:
-- [ ] ground truth 改用正确 pitch (≈0.378, 或直接用 fit 参数 omega≈98.87°, pitch≈0.372)
-- [ ] 锚点变量加 blen/bang 化学约束 (强加权残差或等号约束)
-- [ ] phi/psi 加物理范围约束 (避免优化到 ±180° 非物理值)
-- [ ] 报告最终 RMSD 和反推的 phi/psi, 与 -60/-45 对比
-- [ ] demo 输出 PDB 应写入临时目录或 gitignore, 不应留在 scripts/
+验证结果: RMSD 0.0025 Å (12 残基, 逐残基 ≤0.003 Å); psi 收敛 -47.4→-38.6,
+phi -58.7→-64.9 (理想 -60/-45, 带轻微漂移以贴合等角螺旋); 锚点 N-CA=1.458,
+CA-C=1.525, N-CA-C=111.2°; O···N_next=2.25 Å (trans 肽平面正确值)。输出 PDB
+写入 scripts/ 但已被 .gitignore 覆盖 (biorazer_prds/scripts/*_fit.pdb)。
 
 ### 2. 完整测试套件
 

@@ -1,8 +1,8 @@
 # Plan A: demo 脚本收尾 — 正确 ground truth + 锚点 blen/bang 约束
 
 > 入口: `biorazer_prds/scripts/demo_crick_100_phipsi.py`
-> 目标: 用正确的 alpha-helix 等价 Crick 参数做 ground truth, 联合优化
-> 锚点 (含 blen/bang 化学约束) + phi/psi, 报告 RMSD 和反推的 phi/psi
+> 状态: 已完成 (2026-09-17) — RMSD 0.0025 Å, psi/phi 收敛到 -60/-45 附近
+> (带轻微漂移以贴合等角螺旋), 锚点键长/键角理想, O 已跟踪 psi
 
 ## 背景
 
