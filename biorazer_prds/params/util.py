@@ -66,7 +66,137 @@ def build_bb_chain_ic(n_res, resn="GLY", ss="alpha-helix", start_res=1,
     return ic
 
 
-def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
+def build_bb_chain_following_ca(target_ca, resn="GLY", ss="alpha-helix",
+                                start_res=1, chain_id="A", max_nfev=20000):
+    """构建 n 残基 backbone 片段, 使其 CA 尽量贴合 target_ca (Crick 轨迹)。
+
+    与 demo_crick_100_phipsi 同法: 锚点刚体 (6 自由度) + 全部 phi/psi 联合
+    least_squares (omega 固定 trans, O 跟踪 psi), 在片段自身坐标系中解出
+    二面角; 返回的片段 anchor 保持模板帧, 由调用方经 _place_new_fragment
+    对齐到实际位置 (形状只差一个刚体变换)。
+
+    这样新片段在**连接前**就已贴住 Crick 轨迹, 连接后无需再优化 —— 两端
+    对称, 也不存在 N 端"接缝父原子被优化牵动"的架构限制。
+
+    Parameters
+    ----------
+    target_ca : (n, 3) ndarray
+        新片段 n 个残基 CA 的目标坐标 (Crick 外推)。
+    """
+    from scipy.optimize import least_squares
+    from scipy.spatial.transform import Rotation as R
+
+    target_ca = np.asarray(target_ca, float)
+    n = len(target_ca)
+    ic = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
+                           chain_id=chain_id)
+    res_idx = {}
+    for i, a in enumerate(ic.atoms):
+        res_idx.setdefault(a.res_id, {})[a.name] = i
+    rids = sorted(res_idx)
+
+    psi_keys = [(res_idx[rids[i - 1]]["N"], res_idx[rids[i - 1]]["CA"],
+                 res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"])
+                for i in range(1, n)]
+    phi_keys = [(res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"],
+                 res_idx[rids[i]]["CA"], res_idx[rids[i]]["C"])
+                for i in range(1, n)]
+    o_keys = [(res_idx[rids[i]]["N"], res_idx[rids[i]]["CA"],
+               res_idx[rids[i]]["C"], res_idx[rids[i]]["O"])
+              for i in range(n)]
+    ca_idx = [res_idx[rids[i]]["CA"] for i in range(n)]
+
+    raw_anchor = dict(ic.anchor)
+    n_psi, n_phi = len(psi_keys), len(phi_keys)
+    REG_W = 1e-3  # 弱正则权重: 打破刚体自由度简并 (见 resid)
+    x0 = np.zeros(6 + n_psi + n_phi)
+    x0[6:6 + n_psi] = -45.0
+    x0[6 + n_psi:] = -60.0
+
+    def build_coords(x):
+        rotvec, t = x[0:3], x[3:6]
+        psi = x[6:6 + n_psi]
+        phi = x[6 + n_psi:]
+        ic2 = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
+                                chain_id=chain_id)
+        rmat = R.from_rotvec(rotvec).as_matrix()
+        ic2.anchor = {k: tuple(rmat @ np.asarray(v, float) + t)
+                      for k, v in raw_anchor.items()}
+        for q, v in zip(psi_keys, psi):
+            ic2.dihedra[q] = v
+        for q, v in zip(phi_keys, phi):
+            ic2.dihedra[q] = v
+        for j in range(n - 1):
+            ic2.dihedra[o_keys[j]] = psi[j] - 180.0
+        coords = ic2.to_coords()
+        return np.array([coords[i] for i in ca_idx], float)
+
+    def resid(x):
+        ca_r = (build_coords(x) - target_ca).ravel()
+        # 打破刚体自由度冗余: 短片段 (n+1 残基) 变量数可能多于 CA 约束,
+        # 解不唯一, 优化器可能挑到非自然二面角使残基框架旋转 (N 端放置后
+        # CA 漂移)。加弱正则把二面角拉向自然值 (-45/-60), 只破简并、不
+        # 干扰真实的 CA 拟合。
+        psi = x[6:6 + n_psi]
+        phi = x[6 + n_psi:]
+        reg = REG_W * np.concatenate([psi - (-45.0), phi - (-60.0)])
+        return np.concatenate([ca_r, reg])
+
+    # phi/psi 物理范围 (alpha-helix): 目标若为非 alpha-helix Crick 轨迹,
+    # 在物理范围内取最优 (新残基 CA 允许残余偏差, 保证键长键角合理)
+    lb = np.full(6 + n_psi + n_phi, -np.inf)
+    ub = np.full(6 + n_psi + n_phi, np.inf)
+    lb[6:6 + n_psi] = -75.0
+    ub[6:6 + n_psi] = -15.0
+    lb[6 + n_psi:] = -85.0
+    ub[6 + n_psi:] = -35.0
+
+    res = least_squares(resid, x0, bounds=(lb, ub), max_nfev=max_nfev)
+
+    # 用解出的二面角重建片段, anchor 留在模板帧 (由 _place_new_fragment 放置)
+    ic2 = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
+                            chain_id=chain_id)
+    psi = res.x[6:6 + n_psi]
+    phi = res.x[6 + n_phi:]
+    for q, v in zip(psi_keys, psi):
+        ic2.dihedra[q] = v
+    for q, v in zip(phi_keys, phi):
+        ic2.dihedra[q] = v
+    for j in range(n - 1):
+        ic2.dihedra[o_keys[j]] = psi[j] - 180.0
+    return ic2
+
+
+def _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus):
+    """把参考链中属于新片段残基的二面角同步到 ic_new (按残基名映射)。
+
+    ic_new 的原子/键长/键角/anchor 由模板脚手架提供, 只有二面角需要来自
+    参考链 (Crick 跟随解)—— 保证片段形状与 _place_new_fragment 的放置参考
+    完全一致 (避免两个独立 least_squares 因刚体自由度解不唯一而失配)。
+    """
+    ref_idx = {(int(a.res_id), a.name): i for i, a in enumerate(ref_ic.atoms)}
+    new_idx = {(int(a.res_id), a.name): i for i, a in enumerate(ic_new.atoms)}
+    first_new = int(ic_new.atoms[0].res_id)
+    if terminus == "C":
+        frag_ref = range(2, n + 2)          # 参考链残基 2..n+1
+        rid_map = {r: first_new + (r - 2) for r in frag_ref}
+    else:
+        frag_ref = range(1, n + 1)          # 参考链残基 1..n
+        rid_map = {r: first_new + (r - 1) for r in frag_ref}
+    for quad, val in ref_ic.dihedra.items():
+        rids = {int(ref_ic.atoms[i].res_id) for i in quad}
+        if not rids <= set(frag_ref):
+            continue
+        new_quad = tuple(
+            new_idx[(rid_map[int(ref_ic.atoms[i].res_id)], ref_ic.atoms[i].name)]
+            for i in quad
+        )
+        ic_new.dihedra[new_quad] = val
+    return ic_new
+
+
+def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C",
+                        ref_ic=None):
     """把 ic_new (build_template 串出的新片段) 放到既有链末端之后的实际位置。
 
     build_template 的 anchor 是模板局部坐标 (N 原点, CA +x), 不是实际空间
@@ -106,9 +236,12 @@ def _place_new_fragment(ic_new, ic_old, ss="alpha-helix", terminus="C"):
     # 所以统一用 to_coords() 取目标残基 N/CA/C 的实测坐标。
     coords_old = ic_old.to_coords()
 
-    # 参考链 (n_new+1) 残基
-    ref_ic = build_bb_chain_ic(n_new + 1, resn=ic_new.atoms[0].res_name,
-                               ss=ss, start_res=1, chain_id="A")
+    # 参考链 (n_new+1) 残基: 默认模板 alpha-helix; 传 ref_ic (Crick 跟随
+    # 片段) 时用其几何做放置 —— 参考链残基 2..n+1 (C 端) / 1..n (N 端) 即
+    # 新片段, 使放置后片段 CA 精确贴住目标轨迹
+    if ref_ic is None:
+        ref_ic = build_bb_chain_ic(n_new + 1, resn=ic_new.atoms[0].res_name,
+                                   ss=ss, start_res=1, chain_id="A")
     ref_coords = ref_ic.to_coords()
     ref_rids = np.array([a.res_id for a in ref_ic.atoms])
     last_rid_ref = n_new + 1
@@ -200,7 +333,8 @@ def _seam_geometry(ca_n, c, n, ca_c):
     return blen, ang_c, ang_n, omega
 
 
-def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C"):
+def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C",
+                         ref_ic=None):
     """把 ic_new (新片段) 连接到 ic_old 的 N 或 C 端。
 
     两段 fragment 的 anchor **都保留** (各自实际坐标), 连接只靠
@@ -219,6 +353,9 @@ def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C"):
     terminus : str
         "C" = 新片段接在既有链 C 端之后 (merged = [既有链][新片段]);
         "N" = 新片段接在既有链 N 端之前 (merged = [新片段][既有链])。
+    ref_ic : InternalCoord | None
+        放置参考链 (含对齐残基 + 新片段, Crick 跟随); None = 模板
+        alpha-helix 参考链。
 
     Returns
     -------
@@ -238,7 +375,7 @@ def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C"):
         C_idx = old_res[last_rid]["C"]
 
         # 新片段 anchor 从模板坐标换到既有链 C 端之后的实际位置
-        _place_new_fragment(ic_new, ic_old, ss=ss, terminus="C")
+        _place_new_fragment(ic_new, ic_old, ss=ss, terminus="C", ref_ic=ref_ic)
         coords_old = ic_old.to_coords()
         coords_new = ic_new.to_coords()
         blen, ang_c, ang_n, omega = _seam_geometry(
@@ -266,7 +403,7 @@ def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C"):
         first_rid = min(old_res)
         N_i = old_res[first_rid]["N"]
 
-        _place_new_fragment(ic_new, ic_old, ss=ss, terminus="N")
+        _place_new_fragment(ic_new, ic_old, ss=ss, terminus="N", ref_ic=ref_ic)
         coords_new = ic_new.to_coords()
         coords_old = ic_old.to_coords()
         blen, ang_c, ang_n, omega = _seam_geometry(
