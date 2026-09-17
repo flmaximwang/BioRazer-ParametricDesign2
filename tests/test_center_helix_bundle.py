@@ -4,6 +4,7 @@
 不丢弃 loop; helix 束被居中到原点。
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ from biorazer_prds.models.assembly_helix import CCCPHelixBundle
 from biorazer.structure.io.protein import Pdb_AtomArray, AtomArray_Pdb
 
 SCRIPT = Path(__file__).resolve().parent.parent / "biorazer_prds/scripts/center_helix_bundle.py"
-REPO_ROOT = SCRIPT.parent.parent
+REPO_ROOT = SCRIPT.parent.parent.parent
 
 
 def _make_rotated_bundle_with_loop():
@@ -46,11 +47,19 @@ class TestCenterHelixBundleScript:
         out = tmp_path / "out.pdb"
         AtomArray_Pdb(output_io=str(inp)).write(_make_rotated_bundle_with_loop())
 
+        # 子进程是裸 python (脚本目录优先入 sys.path), site-packages 的
+        # biorazer_parametric_design.pth 指向 main tree; 显式前置 worktree
+        # 根, 确保子进程用当前工作树的 biorazer_prds (而非 main 的旧代码)。
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(REPO_ROOT)]
+            + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+        )
         result = subprocess.run(
             [sys.executable, str(SCRIPT), str(inp),
              "--helix", "A:1-12", "--helix", "B:1-12",
              "-o", str(out), "--atol-rot", "1e-3", "--atol-trans", "1e-3"],
-            capture_output=True, text=True, cwd=str(REPO_ROOT),
+            capture_output=True, text=True, cwd=str(REPO_ROOT), env=env,
         )
         assert result.returncode == 0, result.stderr + result.stdout
 
