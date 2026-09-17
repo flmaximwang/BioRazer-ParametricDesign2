@@ -21,8 +21,9 @@ from ..params.util import (
     ca_xyz_to_atom_array,
     pulchra_fix_backbone,
     build_bb_chain_ic,
+    build_bb_chain_following_ca,
     connect_ic_fragments,
-    optimize_bb_to_ca,
+    _sync_fragment_dihedrals,
 )
 
 
@@ -268,46 +269,35 @@ class CrickHelix(AssemblyParaRef):
         # 2) 既有链 -> InternalCoord (anchor 在链首, 全链由实测几何决定)
         ic_old = InternalCoord.from_atomarray(structure)
 
-        # 3) 新片段内坐标链 (build_template 串联), 按残基名/链标注
+        # 3) 参考链 (n+1 残基, 含对齐残基) 跟随 Crick 目标 CA 解出二面角
+        #    (连接前在片段自身坐标系完成, demo 同法); 新片段 = 参考链的对
+        #    应残基, 二面角从参考链同步 (只解一次, 避免两个 least_squares
+        #    因刚体自由度解不唯一而失配)
         chain_id0 = structure.chain_id[0]
         res_ids = np.unique(structure.res_id)
         if terminus == "N":
             start_res = int(min(res_ids)) - n
         else:
             start_res = int(max(res_ids)) + 1
+        ref_ca = helix_ca[-(n + 1):] if terminus == "C" else helix_ca[:n + 1]
+        ref_ic = build_bb_chain_following_ca(
+            ref_ca, resn=resn, ss="alpha-helix", start_res=1, chain_id="A",
+        )
         ic_new = build_bb_chain_ic(
             n, resn=resn, ss="alpha-helix",
             start_res=start_res, chain_id=chain_id0,
         )
+        _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus)
 
         # 4) 连接 (两段 anchor 保留, 连接处 omega 实测; N/C 端语义见
         #    connect_ic_fragments: C 端 merged=[既有链][新片段], N 端
-        #    merged=[新片段][既有链])
+        #    merged=[新片段][既有链])。ref_ic 提供放置参考 (Crick 跟随),
+        #    使放置后片段 CA 精确贴住 Crick 轨迹, 连接后无需再优化
+        #    (两端对称)。
         merged = connect_ic_fragments(ic_old, ic_new, ss="alpha-helix",
-                                      terminus=terminus)
-        if terminus == "C":
-            new_atoms = set(range(len(ic_old), len(merged)))
-        else:
-            new_atoms = set(range(0, len(ic_new)))
+                                      terminus=terminus, ref_ic=ref_ic)
 
-        # 5) 分段优化 backbone 二面角, 使新残基 CA 贴近目标 (仅 C 端)。
-        #    N 端不可优化: 接缝 omega 的父原子是新片段末残基 (CA/C),
-        #    而它放置的既有链首残基 CA 同时在 anchor 里; 新片段任何内部
-        #    二面角旋转都会传播到接缝父原子, to_coords 会把接缝放置坐标与
-        #    anchor 判为不一致而抛错 (既有链又必须不动)。N 端直接采用
-        #    _place_new_fragment 对齐后的模板几何 (实测新 CA 距 Crick 目标
-        #    ~0.2 Å, 与 C 端优化后同量级)。
-        if terminus == "C":
-            ca_new_idx = [
-                i for i in sorted(new_atoms)
-                if merged.atoms[i].name == "CA"
-            ]
-            optimize_bb_to_ca(
-                merged, target_ca, ca_new_idx, ss="alpha-helix",
-                new_atoms=new_atoms,
-            )
-
-        # 6) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
+        # 5) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
         new_structure = merged.to_atomarray()
         order = np.argsort(new_structure.res_id, kind="stable")
         return new_structure[order]
