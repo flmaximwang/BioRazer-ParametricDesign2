@@ -626,7 +626,7 @@ class TestCrickTrimOrExtend:
 
     def test_extend_nterm(self):
         h = self._make_helix()
-        h.trim_or_extend(2, "N")
+        h.trim_or_extend(2, "N", type="fit")
         assert len(np.unique(h.structure.res_id)) == 9
         # N 端新增残基在链首 (res_id 最小)
         ids = np.unique(h.structure.res_id)
@@ -634,7 +634,7 @@ class TestCrickTrimOrExtend:
 
     def test_extend_cterm(self):
         h = self._make_helix()
-        h.trim_or_extend(3, "C")
+        h.trim_or_extend(3, "C", type="fit")
         assert len(np.unique(h.structure.res_id)) == 10
         assert np.unique(h.structure.res_id)[-1] == 10
 
@@ -645,7 +645,7 @@ class TestCrickTrimOrExtend:
 
     def test_extend_resn(self):
         h = self._make_helix()
-        h.trim_or_extend(1, "C", resn="ala")
+        h.trim_or_extend(1, "C", resn="ala", type="fit")
         assert np.unique(h.structure.res_id)[-1] == 8
         # 新增残基为 ALA
         ca = h.structure[h.structure.atom_name == "CA"]

@@ -185,7 +185,10 @@ class CrickHelix(AssemblyParaRef):
         self.extra_param["helix_type"] = self.calculate_helix_type(self.param["omega"])
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
-    def trim_or_extend(self, n: int, terminus: str, resn: str = "GLY"):
+    def trim_or_extend(
+        self, n: int, terminus: str, resn: str = "GLY",
+        type: str = "canonical",
+    ):
         """在螺旋一端伸长或缩短若干残基 (仅 backbone)。
 
         Parameters
@@ -197,6 +200,15 @@ class CrickHelix(AssemblyParaRef):
         resn : str
             新增残基名称 (仅影响伸长部分; 缩短无新增)。单字母或三字母,
             大小写不敏感; 统一转大写。
+        type : str
+            伸长模式 (仅完整 backbone 输入有效):
+            - ``"canonical"`` (默认): 新残基用**标准内坐标**模板
+              (build_bb_chain_ic 理想 alpha-helix 键长/键角/二面角),
+              不依赖拟合参数。
+            - ``"fit"``: 新残基用 **CrickHelix fit 的结果** —— 沿拟合
+              Crick 参数外推的目标 CA 生成 (需先调用 fit() 得到完整参数)。
+            CA-only 输入 (无 N/CA/C/O) 仅支持 ``"fit"`` (追加 Crick 外推
+            CA, 保持 CA-only); ``"canonical"`` 会报错。
 
         仅支持叶节点; 修改后经 ``replace_with`` 重建祖先 structure/mask。
         """
@@ -205,7 +217,11 @@ class CrickHelix(AssemblyParaRef):
         if terminus not in ("N", "C"):
             raise ValueError(f"terminus 仅支持 'N'/'C', 得到 {terminus!r}")
         if not isinstance(n, int):
-            raise TypeError(f"n 必须为整数, 得到 {type(n).__name__}")
+            raise TypeError(f"n 必须为整数, 得到 {n.__class__.__name__}")
+        if type not in ("canonical", "fit"):
+            raise ValueError(
+                f"type 仅支持 'canonical'/'fit', 得到 {type!r}"
+            )
         if n == 0:
             return self
 
@@ -223,7 +239,7 @@ class CrickHelix(AssemblyParaRef):
         new_part = copy.copy(self)
         if n > 0:
             new_part.structure = self._extend_backbone_internal_coord(
-                n, resn, terminus
+                n, resn, terminus, type=type
             )
         else:
             new_part.remove_atoms(self._trim_mask(-n, terminus))
@@ -234,13 +250,19 @@ class CrickHelix(AssemblyParaRef):
         new_part.ref_structure = None
         return self.replace_with(new_part)
 
-    def _extend_backbone_internal_coord(self, n: int, resn: str, terminus: str):
+    def _extend_backbone_internal_coord(
+        self, n: int, resn: str, terminus: str, type: str = "canonical",
+    ):
         """内坐标方式在 terminus 端伸长 n 个残基 (替代 CA+pulchra 重建)。
 
         新残基 backbone 由 biorazer 内坐标模板 (build_template, alpha-helix
-        化学理想键长/键角) 构建并 connect 到既有链; 再对 backbone 的
-        phi/psi/omega 分阶段优化 (psi/phi 先行, 后全部), 使新残基 CA 在
-        alpha-helix 允许范围内尽量贴近 Crick 拟合轨迹外推的目标 CA。
+        化学理想键长/键角) 构建并 connect 到既有链。伸长模式由 ``type`` 决定:
+
+        - ``"canonical"``: 标准内坐标 —— 新残基直接用模板理想 alpha-helix
+          二面角 (build_bb_chain_ic), 不依赖拟合参数, 也不需要 fit()。
+        - ``"fit"``: 用 CrickHelix fit 的结果 —— 沿拟合 Crick 参数外推的
+          目标 CA 生成均匀螺旋 (uniform 解, 见 build_bb_chain_following_ca),
+          需先调用 fit() 得到完整参数。
 
         Returns
         -------
@@ -258,60 +280,76 @@ class CrickHelix(AssemblyParaRef):
         #    输入才走内坐标流程 (既有链完全不动, 新残基由 IC 模板构建)。
         structure = self.structure
         if not {"N", "C", "O"} <= set(structure.atom_name):
+            if type == "canonical":
+                raise ValueError(
+                    "canonical 模式需要完整 backbone (N/CA/C/O) 输入; "
+                    "CA-only 结构请用 type='fit' (需先调用 fit())"
+                )
             extended = bt_struct.concatenate([
                 structure, self._extend_fragment(n, resn, terminus)
             ])
             order = np.argsort(extended.res_id, kind="stable")
             return extended[order]
 
-        # 1) 目标 CA: 拟合轨迹外推 n 个残基 (与 _extend_fragment 同法)
-        required = {
-            "residue_num", "centroid", "direction", "radius",
-            "omega", "pitch_angle", "phi0",
-        }
-        missing = required - set(self.param)
-        if missing:
-            raise ValueError(
-                "trim_or_extend 伸长需要完整 Crick 参数, 缺少 "
-                f"{sorted(missing)}; 请先调用 fit() 拟合参数"
-            )
-        residue_num = len(np.unique(structure.res_id))
-        kwargs = {**self.param, "residue_num": residue_num + 2 * n}
-        helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
-        target_ca = helix_ca[:n] if terminus == "N" else helix_ca[-n:]
-
-        # 2) 既有链 -> InternalCoord (anchor 在链首, 全链由实测几何决定)
+        # 1) 既有链 -> InternalCoord (anchor 在链首, 全链由实测几何决定)
         ic_old = InternalCoord.from_atomarray(structure)
-
-        # 3) 参考链 (n+1 残基, 含对齐残基) 跟随 Crick 目标 CA 解出二面角
-        #    (连接前在片段自身坐标系完成, demo 同法); 新片段 = 参考链的对
-        #    应残基, 二面角从参考链同步 (只解一次, 避免两个 least_squares
-        #    因刚体自由度解不唯一而失配)
         chain_id0 = structure.chain_id[0]
         res_ids = np.unique(structure.res_id)
         if terminus == "N":
             start_res = int(min(res_ids)) - n
         else:
             start_res = int(max(res_ids)) + 1
-        ref_ca = helix_ca[-(n + 1):] if terminus == "C" else helix_ca[:n + 1]
-        ref_ic = build_bb_chain_following_ca(
-            ref_ca, resn=resn, ss="alpha-helix", start_res=1, chain_id="A",
-        )
-        ic_new = build_bb_chain_ic(
-            n, resn=resn, ss="alpha-helix",
-            start_res=start_res, chain_id=chain_id0,
-        )
-        _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus)
 
-        # 4) 连接 (两段 anchor 保留, 连接处 omega 实测; N/C 端语义见
+        if type == "canonical":
+            # 标准内坐标: 参考链与片段都是 build_bb_chain_ic 模板 (理想
+            # alpha-helix 二面角), 不依赖拟合参数; 接缝几何由
+            # connect_ic_fragments 实测吸收。
+            ref_ic = build_bb_chain_ic(
+                n + 1, resn=resn, ss="alpha-helix", start_res=1, chain_id="A",
+            )
+            ic_new = build_bb_chain_ic(
+                n, resn=resn, ss="alpha-helix",
+                start_res=start_res, chain_id=chain_id0,
+            )
+        else:  # type == "fit"
+            # 2) 目标 CA: 拟合轨迹外推 n+1 个残基 (含对齐残基)
+            required = {
+                "residue_num", "centroid", "direction", "radius",
+                "omega", "pitch_angle", "phi0",
+            }
+            missing = required - set(self.param)
+            if missing:
+                raise ValueError(
+                    "trim_or_extend 伸长 (type='fit') 需要完整 Crick 参数, "
+                    f"缺少 {sorted(missing)}; 请先调用 fit() 拟合参数"
+                )
+            residue_num = len(np.unique(structure.res_id))
+            kwargs = {**self.param, "residue_num": residue_num + 2 * n}
+            helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
+            ref_ca = helix_ca[-(n + 1):] if terminus == "C" else helix_ca[:n + 1]
+            # uniform=True: 只解一个均匀 psi/phi (用拟合 Crick 参数决定的新
+            # 螺旋), 不做逐残基全局优化 —— 片段保持均匀螺旋, 二面角不被扭到
+            # 边界。均匀 psi/phi 在整条拟合轨迹 (helix_ca) 上解出 (短片段
+            # 目标欠定); 目标轨迹与均匀螺旋的残余偏差 (~0.3 Å) 由
+            # connect_ic_fragments 的接缝几何吸收。
+            ref_ic = build_bb_chain_following_ca(
+                ref_ca, resn=resn, ss="alpha-helix", start_res=1,
+                chain_id="A", uniform=True, fit_target_ca=helix_ca,
+            )
+            ic_new = build_bb_chain_ic(
+                n, resn=resn, ss="alpha-helix",
+                start_res=start_res, chain_id=chain_id0,
+            )
+            _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus)
+
+        # 3) 连接 (两段 anchor 保留, 连接处 omega 实测; N/C 端语义见
         #    connect_ic_fragments: C 端 merged=[既有链][新片段], N 端
-        #    merged=[新片段][既有链])。ref_ic 提供放置参考 (Crick 跟随),
-        #    使放置后片段 CA 精确贴住 Crick 轨迹, 连接后无需再优化
-        #    (两端对称)。
+        #    merged=[新片段][既有链])。ref_ic 提供放置参考 (canonical =
+        #    模板螺旋; fit = Crick 跟随), 使放置后片段 CA 贴住参考几何。
         merged = connect_ic_fragments(ic_old, ic_new, ss="alpha-helix",
                                       terminus=terminus, ref_ic=ref_ic)
 
-        # 5) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
+        # 4) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
         new_structure = merged.to_atomarray()
         order = np.argsort(new_structure.res_id, kind="stable")
         return new_structure[order]

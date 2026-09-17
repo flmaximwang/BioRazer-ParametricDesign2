@@ -67,48 +67,115 @@ def build_bb_chain_ic(n_res, resn="GLY", ss="alpha-helix", start_res=1,
 
 
 def build_bb_chain_following_ca(target_ca, resn="GLY", ss="alpha-helix",
-                                start_res=1, chain_id="A", max_nfev=20000):
+                                start_res=1, chain_id="A", max_nfev=20000,
+                                uniform=False, fit_target_ca=None):
     """构建 n 残基 backbone 片段, 使其 CA 尽量贴合 target_ca (Crick 轨迹)。
 
-    与 demo_crick_100_phipsi 同法: 锚点刚体 (6 自由度) + 全部 phi/psi 联合
-    least_squares (omega 固定 trans, O 跟踪 psi), 在片段自身坐标系中解出
-    二面角; 返回的片段 anchor 保持模板帧, 由调用方经 _place_new_fragment
-    对齐到实际位置 (形状只差一个刚体变换)。
+    uniform=False (旧行为): 逐残基 phi/psi 联合 least_squares。变量多
+    (6 + 2(n-1))、解不唯一, 优化器可能找到"CA 贴住但二面角扭曲"的解
+    (psi/phi 被推到边界, 片段不再是均匀螺旋) —— 放置后整条轴倾斜。
 
-    这样新片段在**连接前**就已贴住 Crick 轨迹, 连接后无需再优化 —— 两端
-    对称, 也不存在 N 端"接缝父原子被优化牵动"的架构限制。
+    uniform=True (推荐): 只解 **一个均匀 psi + 一个均匀 phi** (加刚体,
+    共 8 变量), 片段保持均匀螺旋 —— 与拟合 Crick 螺旋的几何一致, 内部
+    二面角不被全局优化扭曲; 目标轨迹与均匀螺旋几何的残余偏差 (~0.3 Å)
+    由连接处 (junction) 吸收。这是"新螺旋用拟合参数生成、只修接缝"的
+    实现方式。
 
     Parameters
     ----------
     target_ca : (n, 3) ndarray
         新片段 n 个残基 CA 的目标坐标 (Crick 外推)。
+    uniform : bool
+        True = 均匀二面角模式 (单 psi/phi + 刚体, 8 变量)。
+    fit_target_ca : (m, 3) ndarray | None
+        仅 uniform=True 有效。均匀 psi/phi 在该长轨迹 (整条拟合螺旋) 上
+        解出, 而不是在短小的 target_ca 上 —— 短片段 (n 很小) 欠定会使
+        均匀解漂移 (n=2 时偏差 ~0.08 Å); 用整条轨迹约束后解稳定, 再套
+        回 n 残基片段。None = 直接在 target_ca 上解。
     """
     from scipy.optimize import least_squares
     from scipy.spatial.transform import Rotation as R
 
     target_ca = np.asarray(target_ca, float)
     n = len(target_ca)
-    ic = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
-                           chain_id=chain_id)
-    res_idx = {}
-    for i, a in enumerate(ic.atoms):
-        res_idx.setdefault(a.res_id, {})[a.name] = i
-    rids = sorted(res_idx)
 
-    psi_keys = [(res_idx[rids[i - 1]]["N"], res_idx[rids[i - 1]]["CA"],
-                 res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"])
-                for i in range(1, n)]
-    phi_keys = [(res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"],
-                 res_idx[rids[i]]["CA"], res_idx[rids[i]]["C"])
-                for i in range(1, n)]
-    o_keys = [(res_idx[rids[i]]["N"], res_idx[rids[i]]["CA"],
-               res_idx[rids[i]]["C"], res_idx[rids[i]]["O"])
-              for i in range(n)]
-    ca_idx = [res_idx[rids[i]]["CA"] for i in range(n)]
+    def _chain_keys(chain):
+        """(psi_keys, phi_keys, o_keys, ca_idx) for a uniform-residue chain."""
+        res_idx = {}
+        for i, a in enumerate(chain.atoms):
+            res_idx.setdefault(int(a.res_id), {})[a.name] = i
+        rids = sorted(res_idx)
+        n_res = len(rids)
+        psi_keys = [(res_idx[rids[i - 1]]["N"], res_idx[rids[i - 1]]["CA"],
+                     res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"])
+                    for i in range(1, n_res)]
+        phi_keys = [(res_idx[rids[i - 1]]["C"], res_idx[rids[i]]["N"],
+                     res_idx[rids[i]]["CA"], res_idx[rids[i]]["C"])
+                    for i in range(1, n_res)]
+        o_keys = [(res_idx[rids[i]]["N"], res_idx[rids[i]]["CA"],
+                   res_idx[rids[i]]["C"], res_idx[rids[i]]["O"])
+                  for i in range(n_res)]
+        ca_idx = [res_idx[rids[i]]["CA"] for i in range(n_res)]
+        return psi_keys, phi_keys, o_keys, ca_idx
 
-    raw_anchor = dict(ic.anchor)
+    # 返回片段: n 残基, 二面角由下面求解决定; anchor 留在模板帧
+    # (由 _place_new_fragment 放置)。
+    ic_ret = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
+                               chain_id=chain_id)
+    psi_keys, phi_keys, o_keys, ca_idx = _chain_keys(ic_ret)
+    raw_anchor = dict(ic_ret.anchor)
     n_psi, n_phi = len(psi_keys), len(phi_keys)
     REG_W = 1e-3  # 弱正则权重: 打破刚体自由度简并 (见 resid)
+
+    if uniform:
+        # 均匀模式: 8 变量 (rotvec 3 + t 3 + 单个 psi + 单个 phi)。所有残基
+        # 共用同一 psi/phi —— 片段保持均匀螺旋, 二面角不会被全局优化扭曲。
+        # 均匀 psi/phi 在 fit_target_ca (整条拟合轨迹) 上解出: 短片段目标
+        # (n 很小) 欠定, 直接解会漂移 (n=2 偏差 ~0.08 Å)。
+        fit_ca = (np.asarray(fit_target_ca, float)
+                  if fit_target_ca is not None else target_ca)
+        m = len(fit_ca)
+        ic_fit = build_bb_chain_ic(m, resn=resn, ss=ss, start_res=start_res,
+                                   chain_id=chain_id)
+        psi_keys_f, phi_keys_f, o_keys_f, ca_idx_f = _chain_keys(ic_fit)
+        raw_anchor_f = dict(ic_fit.anchor)
+
+        x0 = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -45.0, -60.0])
+
+        def build_coords_fit(x):
+            rotvec, t = x[0:3], x[3:6]
+            psi, phi = x[6], x[7]
+            ic2 = build_bb_chain_ic(m, resn=resn, ss=ss, start_res=start_res,
+                                    chain_id=chain_id)
+            rmat = R.from_rotvec(rotvec).as_matrix()
+            ic2.anchor = {k: tuple(rmat @ np.asarray(v, float) + t)
+                          for k, v in raw_anchor_f.items()}
+            for q in psi_keys_f:
+                ic2.dihedra[q] = psi
+            for q in phi_keys_f:
+                ic2.dihedra[q] = phi
+            for j in range(m - 1):
+                ic2.dihedra[o_keys_f[j]] = psi - 180.0
+            coords = ic2.to_coords()
+            return np.array([coords[i] for i in ca_idx_f], float)
+
+        def resid_uniform(x):
+            return (build_coords_fit(x) - fit_ca).ravel()
+
+        lb = np.array([-np.inf] * 6 + [-75.0, -85.0])
+        ub = np.array([np.inf] * 6 + [-15.0, -35.0])
+        res = least_squares(resid_uniform, x0, bounds=(lb, ub),
+                            max_nfev=max_nfev)
+        psi_val, phi_val = float(res.x[6]), float(res.x[7])
+        for q in psi_keys:
+            ic_ret.dihedra[q] = psi_val
+        for q in phi_keys:
+            ic_ret.dihedra[q] = phi_val
+        for j in range(n - 1):
+            ic_ret.dihedra[o_keys[j]] = psi_val - 180.0
+        return ic_ret
+
+    # 非均匀 (旧) 模式: 逐残基 phi/psi 联合 least_squares
     x0 = np.zeros(6 + n_psi + n_phi)
     x0[6:6 + n_psi] = -45.0
     x0[6 + n_psi:] = -60.0
@@ -152,19 +219,16 @@ def build_bb_chain_following_ca(target_ca, resn="GLY", ss="alpha-helix",
     ub[6 + n_psi:] = -35.0
 
     res = least_squares(resid, x0, bounds=(lb, ub), max_nfev=max_nfev)
-
-    # 用解出的二面角重建片段, anchor 留在模板帧 (由 _place_new_fragment 放置)
-    ic2 = build_bb_chain_ic(n, resn=resn, ss=ss, start_res=start_res,
-                            chain_id=chain_id)
     psi = res.x[6:6 + n_psi]
     phi = res.x[6 + n_phi:]
+
     for q, v in zip(psi_keys, psi):
-        ic2.dihedra[q] = v
+        ic_ret.dihedra[q] = v
     for q, v in zip(phi_keys, phi):
-        ic2.dihedra[q] = v
+        ic_ret.dihedra[q] = v
     for j in range(n - 1):
-        ic2.dihedra[o_keys[j]] = psi[j] - 180.0
-    return ic2
+        ic_ret.dihedra[o_keys[j]] = psi[j] - 180.0
+    return ic_ret
 
 
 def _sync_fragment_dihedrals(ic_new, ref_ic, n, terminus):

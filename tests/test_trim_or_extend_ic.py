@@ -130,3 +130,27 @@ class TestCrickTrimOrExtendIC:
             h.trim_or_extend(-7, "N")
         with pytest.raises(ValueError, match="残基"):
             h.trim_or_extend(1, "C", resn="XYZ")
+
+    def test_type_fit_matches_ideal(self):
+        """type='fit': 用拟合参数 (理想输入下与 canonical 等价)。"""
+        h, mer7 = _make_helix7()
+        h.trim_or_extend(2, "N", type="fit")
+        S = h.structure
+        _assert_existing_chain_untouched(S, mer7)
+        new_ca = S.coord[(S.atom_name == "CA") & (S.res_id < 1)]
+        np.testing.assert_allclose(
+            new_ca, _crick_target(h.param, 2, "N"), atol=1e-3
+        )
+
+    def test_type_invalid_raises(self):
+        h, _ = _make_helix7()
+        with pytest.raises(ValueError, match="type"):
+            h.trim_or_extend(1, "N", type="bogus")
+
+    def test_canonical_on_ca_only_raises(self):
+        """canonical 需要完整 backbone; CA-only 输入应报错 (用 type='fit')。"""
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=7, backbone_type="CA")
+        with pytest.raises(ValueError, match="canonical"):
+            h.trim_or_extend(2, "N")
