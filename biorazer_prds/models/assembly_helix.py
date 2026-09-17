@@ -15,6 +15,7 @@ from biorazer.database.alphabet import (
 from .assembly_para_ref import AssemblyParaRef
 from ..params.helix_cp.generate import generate_helix_ca_by_crick
 from ..params.helix_cp.fit import fit_helix_by_crick
+from ..params.helix_cp.backbone import fit_bb_to_ca
 from ..params.cccp.generate import generate_cc_ca_by_cccp
 from ..params.cccp.fit import fit_cc_by_cccp
 from ..params.util import (
@@ -100,13 +101,21 @@ class CrickHelix(AssemblyParaRef):
         pitch_angle: float = 0.358,
         phi0: float = 0.0,
         backbone_type: str = "Gly",
+        ss: str = "alpha-helix",
     ):
-        """Parameters
+        """按参数生成螺旋结构。主链由 InternalCoord + build_template 构
+        建, 再经两阶段 phi/psi fit 使 CA 贴合目标 Crick 轨迹 (不再用
+        pulchra)。
+
+        Parameters
         ----------
         backbone_type : str
-            - "CA": only CA atoms
-            - "Gly": Glycine backbone atoms (N, CA, C, O)
-            - "Ala": Alanine backbone atoms (N, CA, C, O, CB)
+            - ``"CA"``: 只生成 CA 原子。
+            - 任意残基名 (三字母, 如 ``"Gly"``/``"Ala"``/``"Leu"``): 生成完整
+              主链 N, CA, C, O (+ 该残基侧链), 大小写不敏感。
+        ss : str
+            二级结构类 (决定模板初始 phi/psi/omega 与拟合 bounds;
+            见 ``build_template`` 支持的 ss 键)。
         """
         helix = cls()
         xyz, param = generate_helix_ca_by_crick(
@@ -118,15 +127,20 @@ class CrickHelix(AssemblyParaRef):
             pitch_angle=pitch_angle,
             phi0=phi0,
         )
-        if backbone_type == "CA":
+        if isinstance(backbone_type, str) and backbone_type.upper() == "CA":
             structure = ca_xyz_to_atom_array(xyz)
-        elif backbone_type == "Gly":
-            structure = ca_xyz_to_atom_array(xyz)
-            structure = pulchra_fix_backbone(structure)
+            fit_stats = None
         else:
-            raise ValueError(f"Unsupported backbone_type: {backbone_type}")
+            resn = str(backbone_type).upper()
+            if resn not in AMINO_ACIDS_3TO1_UPPER:
+                raise ValueError(
+                    f"Unsupported backbone_type/residue: {backbone_type!r}; "
+                    f"use 'CA' or a three-letter residue name"
+                )
+            structure, fit_stats = fit_bb_to_ca(resn, xyz, ss=ss)
         helix.structure = structure
         helix.param = param
+        helix.extra_param.setdefault("fit_stats", fit_stats)
         return helix
 
     def fit(self, verbose: bool = False):

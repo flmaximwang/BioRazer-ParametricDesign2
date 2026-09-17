@@ -19,3 +19,4 @@ __pycache__
 
 # Demo outputs
 biorazer_prds/scripts/*_fit.pdb
+demo_pdbs/

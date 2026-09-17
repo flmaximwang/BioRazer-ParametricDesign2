@@ -893,3 +893,65 @@ class TestReplaceWith:
         assert len(root.structure) == 6 + 6
         assert root.mask["a"].sum() == 6
         assert root.mask["b"].sum() == 6
+
+
+class TestCrickHelixFromParamBackbone:
+    """from_param: InternalCoord + build_template + phi/psi fit 主链生成。
+
+    旧流程仅支持 CA / pulchra Gly; 新流程用 fit_bb_to_ca 支持任意残基
+    (含侧链), CA 贴合 Crick 目标轨迹。
+    """
+
+    def test_ca_only(self):
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=7, backbone_type="CA")
+        assert set(h.structure.atom_name) == {"CA"}
+        assert len(h.structure) == 7
+
+    def test_non_gly_backbone_has_sidechain(self):
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=7, backbone_type="Ala")
+        names = set(h.structure.atom_name)
+        assert {"N", "CA", "C", "O", "CB"} <= names
+        # 每残基一组主链+CB
+        assert len(h.structure) == 7 * 5
+        assert len(np.unique(h.structure.res_id)) == 7
+
+    def test_ca_matches_crick_target(self):
+        from biorazer_prds.models.assembly_helix import CrickHelix
+        from biorazer_prds.params.helix_cp.generate import generate_helix_ca_by_crick
+
+        n = 14
+        target, _ = generate_helix_ca_by_crick(residue_num=n)
+        h = CrickHelix.from_param(residue_num=n, backbone_type="Gly")
+        ca = h.structure[h.structure.atom_name == "CA"].coord
+        per = np.linalg.norm(ca - target, axis=1)
+        assert per.max() < 0.1  # 键长/角恒定下 CA 贴合目标
+
+    def test_backbone_bonds_ideal(self):
+        """InternalCoord 键长/角恒定: 生成结构键长应贴近数据库理想值。"""
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=7, backbone_type="Ala")
+        arr = h.structure
+        by_res = {}
+        for r in np.unique(arr.res_id):
+            by_res[r] = {a: c for a, c in zip(
+                arr.atom_name[arr.res_id == r], arr.coord[arr.res_id == r])}
+        # 同残基键长
+        for pat, ideal in [(("N", "CA"), 1.458), (("CA", "C"), 1.525)]:
+            for r, d in by_res.items():
+                assert abs(np.linalg.norm(d[pat[0]] - d[pat[1]]) - ideal) < 1e-3
+        # 跨残基肽键 C_i - N_{i+1}
+        res_ids = sorted(by_res)
+        for a, b in zip(res_ids[:-1], res_ids[1:]):
+            d = np.linalg.norm(by_res[a]["C"] - by_res[b]["N"])
+            assert abs(d - 1.329) < 1e-3
+
+    def test_unsupported_residue_raises(self):
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        with pytest.raises(ValueError, match="Unsupported backbone_type"):
+            CrickHelix.from_param(residue_num=7, backbone_type="XX")
