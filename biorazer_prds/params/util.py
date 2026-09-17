@@ -395,6 +395,20 @@ def optimize_bb_to_ca(ic, target_ca, ca_indices, ss="alpha-helix",
             max_nfev=max_nfev,
         )
 
+    # O 跟踪 psi: 优化改动了 psi, 但 carbonyl O 的二面角 (N,CA,C,O) 停在
+    # 模板值, 需同步为 psi - 180 (trans 肽平面), 否则 O 相对 N_next 漂移
+    # (demo 中 psi→±180° 时 O 曾与 N_next 碰撞, O···N ≈ 0.65 Å)。O 是分支
+    # 原子, 不影响 CA 拟合, 故在优化结束后统一更新。
+    by_res = {}
+    for i, a in enumerate(ic.atoms):
+        by_res.setdefault(a.res_id, {})[a.name] = i
+    for q in quads:
+        names = tuple(ic.atoms[i].name for i in q)
+        if names == ("N", "CA", "C", "N"):
+            o_idx = by_res.get(ic.atoms[q[0]].res_id, {}).get("O")
+            if o_idx is not None:
+                ic.dihedra[(q[0], q[1], q[2], o_idx)] = ic.dihedra[q] - 180.0
+
     return ic
 
 
