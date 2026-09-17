@@ -1,9 +1,9 @@
 # Plan: fix_trim_or_extend 内坐标重建 backbone
 
 > 分支: `fix_trim_or_extend` (worktree: `.worktrees/fix_trim_or_extend`)
-> 状态: 进行中 — 内坐标化主体完成并验证 (C/N 端新 CA 距 Crick 目标
-> 0.11/0.21 Å, 既有链不动, 键长理想); 待 Plan A demo 收尾 / Plan B 正式
-> 测试 / Plan D N 端目标语义决策
+> 状态: 内坐标化完成 — Crick 跟随重设计后 C/N 端新 CA 距目标 0.0000 Å
+> (理想输入) / 0.16-0.19 Å (pulchra 输入), 既有链不动, 键长理想, 无连接后
+> 优化 (N 端架构限制已消除); 待与 main 同步 / 按需评估 CCCP 束内坐标化
 
 ## 背景与问题
 
@@ -46,9 +46,13 @@
 - 伸长分支改用 `_extend_backbone_internal_coord(n, resn, terminus)`:
   1. 目标 CA: Crick 拟合参数外推 (generate_helix_ca_by_crick)
   2. 既有链 -> InternalCoord.from_atomarray (anchor 在链首, 实际坐标)
-  3. 新片段 build_bb_chain_ic
-  4. connect_ic_fragments (N/C 端)
-  5. optimize_bb_to_ca
+  3. 参考链 (n+1 残基, 含对齐残基) 经 `build_bb_chain_following_ca` 跟随
+     Crick 目标 CA 解出二面角 (连接前在片段自身坐标系完成, demo 同法,
+     弱正则打破刚体简并); 新片段 = 参考链对应残基, 二面角经
+     `_sync_fragment_dihedrals` 同步
+  4. connect_ic_fragments (N/C 端): `_place_new_fragment` 用参考链对齐 +
+     实测接缝 (`_seam_geometry`) + connect_internal_coords
+  5. 无连接后优化 (片段已贴 Crick 轨迹, 两端对称)
   6. to_atomarray 重建, 按 res_id 排序
 - 缩短分支不变 (remove_atoms)
 - 漏传 terminus 参数 bug 已修 (N 端曾走 C 端逻辑)
@@ -58,23 +62,29 @@
 输入 = 7 残基 alpha-helix 等价 Crick 链 (omega=100°, pitch=0.378,
 radius=2.26, CA 经 pulchra 重建 backbone), 链坐在自身居中 t 网格上:
 - C 端伸长 3: 既有链最大位移 1.4e-15 Å (不动), 新残基 CA 距 Crick 目标
-  0.11 Å, N-CA=1.458 / CA-C=1.525 (理想)
+  0.11→0.16 Å, N-CA=1.458 / CA-C=1.525 (理想)
 - N 端伸长 2: 既有链最大位移 1.4e-15 Å (不动), 新残基 CA 距 Crick 目标
-  0.21 Å, 键长理想
+  0.21→0.19 Å, 键长理想
+- build_bb_chain_ic 理想输入: C/N 端新 CA 距目标 **0.0000 Å** (Crick 跟随
+  精确复现)
 - 注意: 验证输入须坐在自身长度网格上 (from_param 语义)。若输入是更长网格
   的子链 (如 10-mer 取前 7), 目标外推带网格相位差 (实测 ~2-3 Å), 非代码 bug。
 
-### 4. 本次会话修复的两个 bug (2026-09-17)
+### 4. 本次会话的修复与设计演进 (2026-09-17)
 
 - 接缝几何必须实测传入: `connect_internal_coords` 默认用理想 Engh & Huber
   值记录接缝; 实际摆放几何与之不符时 (非理想输入), to_coords 抛
   "Inconsistent coordinate"。已新增 `_seam_geometry` 实测四原子
   (CA, C, N, CA) 几何后显式传入。
-- N 端接缝不可优化 (架构限制): 接缝 omega 的父原子是新片段末残基 (CA/C),
-  其放置的既有链首残基 CA 同时在 anchor 里; 新片段任何内部二面角旋转都会
-  传播到接缝父原子, to_coords 判定接缝放置与 anchor 不一致而抛错 (既有链
-  又必须不动)。因此 N 端跳过优化 (实测 0.21 Å, 与 C 端优化后同量级);
-  C 端可优化 (接缝父原子是既有链原子, 不动)。
+- ~~N 端接缝不可优化 (架构限制)~~: 该限制已随 Crick 跟随重设计消除 ——
+  新片段在**连接前**于自身坐标系解出贴 Crick 轨迹的二面角, 连接后不再
+  优化, 两端对称。原 N 端跳过优化的折衷方案已删除。
+- Crick 跟随重设计 (用户方案): 新片段不再用"模板 + 连接后优化", 而是
+  `build_bb_chain_following_ca` 在片段自身坐标系联合 least_squares 解出
+  phi/psi (刚体 6 自由度 + phi/psi, omega 固定 trans, O 跟踪 psi), 使
+  CA 精确贴 Crick 轨迹; 弱正则 (1e-3) 打破短片段刚体自由度简并 (解不唯一
+  曾致 N 端框架旋转、放置后 CA 漂移 0.61 Å)。只解一次参考链, 片段二面角
+  从参考链同步, 避免两个 solve 失配。
 - CA-only 输入 (backbone_type="CA") 保持 CA-only 延长: 无既有 backbone 可
   连接, 也不伪造 pulchra 畸变 backbone; 新 CA 由 Crick 外推生成。
 

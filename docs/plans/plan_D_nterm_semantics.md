@@ -1,7 +1,11 @@
 # Plan D: N 端伸长目标 CA 的语义决策
 
 > 范围: CrickHelix.trim_or_extend N 端伸长时的目标 CA 来源
-> 状态: 待用户决策
+> 状态: **已按方案 1 落实 (2026-09-17)** — Crick 跟随重设计后, 新片段在
+> 连接前于自身坐标系解出贴 Crick 轨迹的二面角, N 端与 C 端对称, 均精确
+> 跟随 Crick 外推 (build_bb_chain_ic 理想输入 0.0000 Å)。若后续要改
+> 方案 2 (化学合理延续), 只需替换 build_bb_chain_following_ca 的目标
+> CA 来源 (用原结构几何外推替代 Crick 外推), 接缝/放置机制不变。
 
 ## 问题
 
