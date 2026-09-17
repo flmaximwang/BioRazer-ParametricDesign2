@@ -6,7 +6,7 @@ import numpy as np
 import biotite.structure as bt_struct
 
 import biorazer.structure.io as br_struct_io
-from biorazer.database.amino_acid import (
+from biorazer.database.alphabet import (
     AMINO_ACIDS_1LETTER,
     AMINO_ACIDS_1TO3_UPPER,
     AMINO_ACIDS_3TO1_UPPER,
