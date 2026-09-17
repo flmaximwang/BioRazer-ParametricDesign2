@@ -2,6 +2,8 @@
 
 > 目标: 为内坐标版 trim_or_extend 写正式 pytest, 覆盖 C/N 两端、伸长/缩短、
 > backbone 化学合理性、既有链不动性、CCCP 束批量场景
+> 状态: 已完成 (2026-09-17) — tests/test_trim_or_extend_ic.py (8 个测试),
+> 全量 pytest 79 passed
 
 ## 背景
 

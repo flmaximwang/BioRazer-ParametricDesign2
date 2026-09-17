@@ -118,18 +118,27 @@ CA-C=1.525, N-CA-C=111.2°; O···N_next=2.25 Å (trans 肽平面正确值)。�
 
 ### 2. 完整测试套件
 
-- [ ] 跑 tests/ 全量 pytest (之前因 amino_acid import 失败, 已改 alphabet)
-- [ ] 为 trim_or_extend 内坐标实现写正式测试 (伸长后 backbone 化学合理,
-      CA 贴合目标, 既有链不动, N/C 端都覆盖)
-- [ ] 覆盖 CCCPHelixBundle.trim_or_extend (批量 spec 场景)
+**已完成 (2026-09-17)**: 全量 pytest 79 passed (含 8 个新 IC 测试)。
+- [x] 跑 tests/ 全量 pytest (amino_acid import 已改 alphabet)
+- [x] 为 trim_or_extend 内坐标实现写正式测试 (tests/test_trim_or_extend_ic.py:
+      C/N 端伸长后 backbone 化学合理、CA 贴合目标 (atol 1e-3)、既有链不动
+      (atol 1e-6)、缩短、resn、错误处理)
+- [x] 覆盖 CCCPHelixBundle.trim_or_extend (批量 spec 场景, 见
+      tests/test_assembly.py TestCCCPTrimOrExtend)
+- 测试暴露并修复 bug: build_bb_chain_ic/_place_new_fragment 硬编码 4 原子/
+  残基, resn≠GLY (如 ALA 带 CB) 时 C_index 取到 O 崩溃 → 改为按残基号/
+  原子名查找。
+- 已知限制 (不测): 顺序多次单端伸长会因居中 t 网格相位漂移导致目标错位;
+  CCCP 束用"一次生成双端"规避 (见 plan 主文档关键发现)。
 
 ### 3. 未提交改动整理
 
 **已完成 (2026-09-17)**: 按 AGENTS.md 逐步 commit —— import 修复 / params
-IC 工具 / models 内坐标化 / 测试 PYTHONPATH / gitignore / docs。
-- demo_crick_100_phipsi.py (Plan A 未完成) 保持 untracked
+IC 工具 / models 内坐标化 / 测试 PYTHONPATH / gitignore / docs / demo /
+O 跟踪 psi / IC 测试 / 非 GLY bug 修复。
+- demo_crick_100_phipsi.py 已纳入 (feat(demo))
 - demo_phi_psi_fit.pdb 已加入 .gitignore
-- 分支落后 main 3 个 commit (pitch 默认值修复等), 后续需 rebase/merge 同步
+- 分支落后 main 5 个 commit (pitch 默认值修复等), 后续需 rebase/merge 同步
 
 ## 相关文件
 
