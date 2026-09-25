@@ -58,15 +58,15 @@ def _build_chain_ic(resn: str, ss: str, n: int):
 
     返回 (ic, per_atom_names, phi_mean, psi_mean, omega_mean)。
     """
-    tpl = build_template(resn, ss, "canonical")
+    tpl, _ = build_template(resn, ss, "canonical")
     per_atom_names = [a.name for a in tpl.atoms]
     n_heavy = len(per_atom_names)
     nC = per_atom_names.index("C")
     phi_t, psi_t, om_t = _residue_torsions(ss)
 
-    ic = build_template(resn, ss, "canonical")
+    ic, _ = build_template(resn, ss, "canonical")
     for r in range(1, n):
-        nxt = build_template(resn, ss, "canonical")
+        nxt, _ = build_template(resn, ss, "canonical")
         # 唯一 res_id: _residue_ca_index 依赖 (chain_id, res_id) 定位 seam CA
         for a in nxt.atoms:
             a.res_id = r + 1

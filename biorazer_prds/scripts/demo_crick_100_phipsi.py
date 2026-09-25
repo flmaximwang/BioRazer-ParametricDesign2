@@ -76,11 +76,11 @@ def build_full_chain(n_res):
     每残基内部: phi_i (C_{i-1},N_i,CA_i,C_i), psi_i (N_i,CA_i,C_i,N_{i+1}),
     omega_i (CA_i,C_i,N_{i+1},CA_{i+1})。变量取 phi/psi (omega 固定 trans)。
     """
-    ic = build_template("GLY", "alpha-helix", "canonical")
+    ic, _ = build_template("GLY", "alpha-helix", "canonical")
     ic.res_id = [1] * len(ic)
     ic.chain_id = ["A"] * len(ic)
     for i in range(2, n_res + 1):
-        nxt = build_template("GLY", "alpha-helix", "canonical")
+        nxt, _ = build_template("GLY", "alpha-helix", "canonical")
         nxt.res_id = [i] * len(nxt)
         nxt.chain_id = ["A"] * len(nxt)
         merged = connect_internal_coords(ic, nxt, C_index=len(ic) - 2, N_index=0)

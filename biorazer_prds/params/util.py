@@ -39,12 +39,12 @@ def build_bb_chain_ic(n_res, resn="GLY", ss="alpha-helix", start_res=1,
         connect_internal_coords,
     )
 
-    ic = build_template(resn, ss, "canonical")
+    ic, spec = build_template(resn, ss, "canonical")
     ic.res_id = [start_res] * len(ic)
     ic.chain_id = [chain_id] * len(ic)
-    phi_t, psi_t = ic.phi, ic.psi
+    phi_t, psi_t = spec.phi, spec.psi
     for r in range(2, n_res + 1):
-        nxt = build_template(resn, ss, "canonical")
+        nxt, _ = build_template(resn, ss, "canonical")
         nxt.res_id = [start_res + r - 1] * len(nxt)
         nxt.chain_id = [chain_id] * len(nxt)
         # 既有链末残基的 N/CA/C (不能按固定偏移取: 非 GLY 残基带侧链原子)
