@@ -35,7 +35,7 @@ def build_bb_chain_ic(n_res, resn="GLY", ss="alpha-helix", start_res=1,
     残基的 anchor, 其余 anchor 删除, 使全链由 backbone 二面角唯一决定。
     """
     from biorazer.database.molecule.icoor.protein.template import build_template
-    from biorazer.structure.manipulation.modification import (
+    from biorazer.structure.manipulation.internal_coord.modification import (
         connect_internal_coords,
     )
 
@@ -426,7 +426,7 @@ def connect_ic_fragments(ic_old, ic_new, ss="alpha-helix", terminus="C",
     InternalCoord
         合并后的内坐标, 两段 anchor 均保留, 连接处仅 omega 为实测值。
     """
-    from biorazer.structure.manipulation.modification import (
+    from biorazer.structure.manipulation.internal_coord.modification import (
         connect_internal_coords,
     )
 

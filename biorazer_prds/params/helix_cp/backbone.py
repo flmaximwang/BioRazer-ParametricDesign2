@@ -38,7 +38,7 @@ from biorazer.database.molecule.icoor.protein.template import (
     ss_torsions,
 )
 from biorazer.structure.bridge import InternalCoord_AtomArray
-from biorazer.structure.manipulation.modification import connect_internal_coords
+from biorazer.structure.manipulation.internal_coord.modification import connect_internal_coords
 
 
 def _residue_torsions(ss: str) -> tuple[float, float, float]:

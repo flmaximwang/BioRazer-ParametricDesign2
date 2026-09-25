@@ -66,7 +66,7 @@ print(f"    相邻 CA 距离: {np.round(np.linalg.norm(np.diff(xyz, axis=0), axi
 # --------------------------------------------------------------------------- #
 from biorazer.database.molecule.icoor.protein.template import build_template
 from biorazer.structure.bridge import InternalCoord_AtomArray
-from biorazer.structure.manipulation.modification import connect_internal_coords
+from biorazer.structure.manipulation.internal_coord.modification import connect_internal_coords
 from scipy.optimize import least_squares
 
 
