@@ -17,6 +17,7 @@
 import numpy as np
 import pytest
 
+from biorazer.structure.bridge import InternalCoord_AtomArray
 from biorazer_prds.models.assembly_helix import CrickHelix
 from biorazer_prds.params.helix_cp.fit import fit_helix_by_crick
 from biorazer_prds.params.helix_cp.generate import generate_helix_ca_by_crick
@@ -25,9 +26,9 @@ from biorazer_prds.params.util import build_bb_chain_ic
 
 def _make_helix7():
     """理想 alpha-helix 7-mer (完整 backbone), 并拟合 Crick 参数。"""
-    mer7 = build_bb_chain_ic(
+    mer7 = InternalCoord_AtomArray(input_io=build_bb_chain_ic(
         7, resn="GLY", ss="alpha-helix", start_res=1, chain_id="A"
-    ).to_atomarray()
+    )).convert()
     ca7 = mer7.coord[mer7.atom_name == "CA"]
     r = fit_helix_by_crick(ca7, residue_num=7)
     p = r[0] if isinstance(r, tuple) else r
@@ -81,9 +82,9 @@ class TestCrickTrimOrExtendIC:
         # 新残基 CA == Crick 外推目标 == 理想 alpha-helix 延续
         new_ca = S.coord[(S.atom_name == "CA") & (S.res_id > 7)]
         np.testing.assert_allclose(new_ca, _crick_target(h.param, 3, "C"), atol=1e-3)
-        mer10 = build_bb_chain_ic(
+        mer10 = InternalCoord_AtomArray(input_io=build_bb_chain_ic(
             10, resn="GLY", ss="alpha-helix", start_res=1, chain_id="A"
-        ).to_atomarray()
+        )).convert()
         ref10 = mer10.coord[(mer10.atom_name == "CA") & (mer10.res_id > 7)]
         np.testing.assert_allclose(new_ca, ref10, atol=1e-3)
         _assert_bonds_ideal(S, [8, 9, 10])

@@ -65,6 +65,7 @@ print(f"    相邻 CA 距离: {np.round(np.linalg.norm(np.diff(xyz, axis=0), axi
 # 2) 为 CA 轨迹重建 backbone, 联合优化锚点 (9 DOF + blen/bang) + 所有 phi/psi
 # --------------------------------------------------------------------------- #
 from biorazer.database.molecule.icoor.protein.template import build_template
+from biorazer.structure.bridge import InternalCoord_AtomArray
 from biorazer.structure.manipulation.modification import connect_internal_coords
 from scipy.optimize import least_squares
 
@@ -208,7 +209,7 @@ for q, v in zip(phi_keys, phi):
     ic_final.dihedra[q] = v
 for j in range(RESIDUE_NUM - 1):
     ic_final.dihedra[o_keys[j]] = psi[j] - 180.0
-arr = ic_final.to_atomarray()
+arr = InternalCoord_AtomArray(input_io=ic_final).convert()
 out = Path(__file__).with_name("demo_phi_psi_fit.pdb")
 from biorazer.structure.io.protein import AtomArray_Pdb
 AtomArray_Pdb(output_io=out).write(arr)

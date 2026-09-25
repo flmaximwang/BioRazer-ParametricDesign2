@@ -37,6 +37,7 @@ from biorazer.database.molecule.icoor.protein.template import (
     build_template,
     ss_torsions,
 )
+from biorazer.structure.bridge import InternalCoord_AtomArray
 from biorazer.structure.manipulation.modification import connect_internal_coords
 
 
@@ -187,7 +188,7 @@ def fit_bb_to_ca(resn, target_ca: np.ndarray, ss: str = "alpha-helix",
     per = np.linalg.norm(ca - target_ca, axis=1)
     rmsd = float(np.sqrt((per ** 2).mean()))
 
-    return best.to_atomarray(), {
+    return InternalCoord_AtomArray(input_io=best).convert(), {
         "rmsd": rmsd,
         "max_per_ca": float(per.max()),
         "phi_mean": float(phi_t),

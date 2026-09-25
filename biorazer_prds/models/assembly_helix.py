@@ -269,7 +269,10 @@ class CrickHelix(AssemblyParaRef):
         bt_struct.AtomArray
             伸长后的完整结构 (按 res_id 升序; N 端新残基在链首)。
         """
-        from biorazer.structure.objects.internal_coords import InternalCoord
+        from biorazer.structure.bridge import (
+            AtomArray_InternalCoord,
+            InternalCoord_AtomArray,
+        )
 
         # 0) IC 连接需要既有链的**化学合理** backbone (N/CA/C/O): 合并后
         #    to_coords 会从新片段理想几何外推既有链首残基原子, 既有链几何
@@ -292,7 +295,7 @@ class CrickHelix(AssemblyParaRef):
             return extended[order]
 
         # 1) 既有链 -> InternalCoord (anchor 在链首, 全链由实测几何决定)
-        ic_old = InternalCoord.from_atomarray(structure)
+        ic_old = AtomArray_InternalCoord(input_io=structure).convert()
         chain_id0 = structure.chain_id[0]
         res_ids = np.unique(structure.res_id)
         if terminus == "N":
@@ -350,7 +353,7 @@ class CrickHelix(AssemblyParaRef):
                                       terminus=terminus, ref_ic=ref_ic)
 
         # 4) 重建 AtomArray; 按 res_id 升序排列 (N 端新残基回链首)
-        new_structure = merged.to_atomarray()
+        new_structure = InternalCoord_AtomArray(input_io=merged).convert()
         order = np.argsort(new_structure.res_id, kind="stable")
         return new_structure[order]
 
