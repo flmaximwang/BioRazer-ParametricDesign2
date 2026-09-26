@@ -2,7 +2,7 @@
 
 ``part`` 是沿纤维重复的刚体单元 (可含多条链, 如 6vy1 把 G + g 两条链当 1 个 part):
 相邻 part 之间是 screw (螺旋对称) 关系 —— 绕纤维轴 (局部 ``z``) 旋转 ``omega``,
-同时沿 ``z`` 平移 ``rise``。参数全部存在 ``param`` 里 (与 CrickHelix /
+同时沿 ``z`` 平移 ``rise``。参数全部存在 ``params`` 里 (与 CrickHelix /
 CCCPHelixBundle 一致); world-frame 的 4x4 变换是它们的派生形式, 见
 :attr:`AssemblyFiber.transformation`。``rise = 0`` 时 screw 退化为纯转动, 即
 n 重旋转对称 :class:`AssemblyCn` (零件成环, 含末→首的闭合步)。
@@ -44,39 +44,39 @@ PART_CODES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 class AssemblyFiber(AssemblyParaRef):
     """沿纤维轴 (z) 螺旋重复的 Assembly (内部节点, 每个 part 是一个子节点)。
 
-    全部参数都在 ``param`` 里 (与 CrickHelix / CCCPHelixBundle 一致):
+    全部参数都在 ``params`` 里 (与 CrickHelix / CCCPHelixBundle 一致):
     ``omega`` (绕轴转角, rad) / ``rise`` (沿轴升高, A) / ``axis_direction``
     (纤维轴) / ``axis_point`` (轴上一点, 即局部原点), 再加 ``part_num`` /
     ``atom_num``。:attr:`transformation` 是它们的 world-frame 4x4 形式,
-    由 ``param`` 派生 (不是独立字段), ``generate_parts`` 反复施加它。
+    由 ``params`` 派生 (不是独立字段), ``generate_parts`` 反复施加它。
     """
 
     #: 子类钩子 —— ``True`` 时 screw 退化为纯转动 (``rise ≡ 0``), 见 AssemblyCn
     _rotation_only = False
 
     # ------------------------------------------------------------------
-    # 变换 (由 param 派生)
+    # 变换 (由 params 派生)
     # ------------------------------------------------------------------
 
     @property
     def transformation(self):
         """``part_i -> part_{i+1}`` 的 4x4 刚体变换 (world frame 齐次矩阵)。
 
-        = 绕纤维轴 (过 ``param['axis_point']``, 方向 ``param['axis_direction']``)
-        转 ``param['omega']``, 再沿轴平移 ``param['rise']``。
-        ``param`` 里没有完整 screw 参数时返回 ``None``。
+        = 绕纤维轴 (过 ``params['axis_point']``, 方向 ``params['axis_direction']``)
+        转 ``params['omega']``, 再沿轴平移 ``params['rise']``。
+        ``params`` 里没有完整 screw 参数时返回 ``None``。
         """
         required = ("omega", "rise", "axis_point", "axis_direction")
-        if any(self.param.get(key) is None for key in required):
+        if any(self.params.get(key) is None for key in required):
             return None
-        axis = np.asarray(self.param["axis_direction"], dtype=float)
+        axis = np.asarray(self.params["axis_direction"], dtype=float)
         axis = axis / np.linalg.norm(axis)
-        rotation = R.from_rotvec(axis * float(self.param["omega"]))
-        point = np.asarray(self.param["axis_point"], dtype=float)
+        rotation = R.from_rotvec(axis * float(self.params["omega"]))
+        point = np.asarray(self.params["axis_point"], dtype=float)
         transformation = np.eye(4)
         transformation[:3, :3] = rotation.as_matrix()
         transformation[:3, 3] = point - rotation.apply(point) \
-            + float(self.param["rise"]) * axis
+            + float(self.params["rise"]) * axis
         return transformation
 
     # ------------------------------------------------------------------
@@ -168,14 +168,14 @@ class AssemblyFiber(AssemblyParaRef):
         3. 各步旋转轴方向平均 = 纤维轴 ``z`` (符号取 ``rise > 0`` 一侧);
            逐步有符号转角 / 沿轴升高的平均 = ``omega`` / ``rise``;
         4. 各步螺旋轴的共同点 = 局部原点; ``x`` = 轴 → ``parts[0]`` 质心;
-        5. screw 参数进 ``param`` (``transformation`` 由它们派生);
+        5. screw 参数进 ``params`` (``transformation`` 由它们派生);
            ``ref_structure`` = 用 ``parts[0]`` + 该 screw 生成的理想 fiber,
            ``rmsd`` = ``ref_structure`` 与观测 parts 的逐原子 RMSD (逐 part 的
-           ``rmsd`` 另存 ``extra_param['part_rmsd']``)。
+           ``rmsd`` 另存 ``params['part_rmsd']``)。
 
         注意: parts 必须是**沿纤维顺序**排的相邻重复单元 (每对相差一步);
         顺序错时各步的转角/升高彼此不一致, ``rmsd`` 会明显变大 —— 用
-        ``extra_param['step_omega'] / ['step_rise'] / ['axis_deviation']`` 诊断。
+        ``params['step_omega'] / ['step_rise'] / ['axis_deviation']`` 诊断。
         """
         def _log(message):
             if verbose:
@@ -271,10 +271,10 @@ class AssemblyFiber(AssemblyParaRef):
 
         self._centroid = origin
         self._xyz = np.vstack((x, y, z))
-        self.extra_param["x"], self.extra_param["y"], self.extra_param["z"] = x, y, z
+        self.params["x"], self.params["y"], self.params["z"] = x, y, z
 
-        # 4) 参数进 param —— transformation 由这些参数派生 (见 transformation 属性)
-        self.param = {
+        # 4) 参数进 params —— transformation 由这些参数派生 (见 transformation 属性)
+        self.params = {
             "part_num": len(segments),
             "atom_num": len(segments[0]),
             "omega": omega,                 # rad, 绕 z (右手, 绕 +z)
@@ -282,15 +282,15 @@ class AssemblyFiber(AssemblyParaRef):
             "axis_direction": z,
             "axis_point": origin,           # 局部原点 (轴上, 与 parts[0] 质心同高)
         }
-        self.extra_param["step_omega"] = np.array(step_omega)
-        self.extra_param["step_rise"] = np.array(step_rise)
-        self.extra_param["step_rmsd"] = np.array([step[2] for step in steps])
-        self.extra_param["axis_deviation"] = axis_deviation
+        self.params["step_omega"] = np.array(step_omega)
+        self.params["step_rise"] = np.array(step_rise)
+        self.params["step_rmsd"] = np.array([step[2] for step in steps])
+        self.params["axis_deviation"] = axis_deviation
         if self._rotation_only:
             # 诊断: 数据里量到的每步转角 (未钉死) → 与 360/n 的差 = Cn 假设的成立程度
             implied_n = 360.0 / abs(np.degrees(measured_omega)) if measured_omega else 0.0
-            self.extra_param["implied_n"] = implied_n
-            self.extra_param["measured_omega"] = measured_omega
+            self.params["implied_n"] = implied_n
+            self.params["measured_omega"] = measured_omega
             _log(f"纯转动: 数据每步 {np.degrees(measured_omega):.4f} deg "
                  f"(反推 n = {implied_n:.4f}, 零件 {len(segments)} 个) "
                  f"→ omega 钉死为 {np.degrees(omega):.4f} deg")
@@ -309,7 +309,7 @@ class AssemblyFiber(AssemblyParaRef):
         part_rmsd = np.array([float(np.sqrt(residual.mean())) for residual in residuals])
         self.rmsd = float(np.sqrt(np.concatenate(residuals).mean()))
         self.ref_structure = bt_struct.concatenate(model_parts)
-        self.extra_param["part_rmsd"] = part_rmsd
+        self.params["part_rmsd"] = part_rmsd
 
         _log(
             f"omega {np.degrees(omega):.3f} deg / rise {rise:.3f} A "
@@ -379,13 +379,13 @@ class AssemblyFiber(AssemblyParaRef):
         Returns
         -------
         AssemblyFiber
-            ``param`` 已填好, ``parts`` / ``structure`` 由 :meth:`generate_parts`
+            ``params`` 已填好, ``parts`` / ``structure`` 由 :meth:`generate_parts`
             生成 (part 序号写进 ``ins_code``, 见 :data:`PART_CODES`)。
         """
         obj = cls()
         if isinstance(part, bt_struct.AtomArray):
             part = Assembly(structure=part)
-        obj.param = {
+        obj.params = {
             "part_num": part_num,
             "atom_num": len(part.structure),
             "omega": omega,                                 # rad
@@ -398,10 +398,10 @@ class AssemblyFiber(AssemblyParaRef):
         return obj
 
     def generate_parts(self, n: int, verbose: bool = False):
-        """按 ``parts`` 的第一个 part + ``param`` 的 screw 生成 n 个 part。
+        """按 ``parts`` 的第一个 part + ``params`` 的 screw 生成 n 个 part。
 
         第 k 个 part (k = 0 ... n-1) = 第一个 part 施加 ``transformation`` k 次
-        (``transformation`` 由 ``param`` 派生: 绕轴转 ``omega`` + 沿轴升 ``rise``)。
+        (``transformation`` 由 ``params`` 派生: 绕轴转 ``omega`` + 沿轴升 ``rise``)。
         ``chain_id`` **保持原样** (G 还是 G), part 序号写进 ``ins_code`` (1 字符:
         ``0``-``9`` → ``A``-``Z`` → ``a``-``z``, 见 ``PART_CODES``); part 的 key =
         ``链名:ins_code`` 用 ``+`` 连接 (单链 part 即 ``A:0``; 6vy1 的 G+g 得 ``G:0+g:0``)。
@@ -417,9 +417,9 @@ class AssemblyFiber(AssemblyParaRef):
         """
         if self.transformation is None:
             raise ValueError(
-                "generate_parts 需要 param 里的 screw 参数 "
+                "generate_parts 需要 params 里的 screw 参数 "
                 f"{['omega', 'rise', 'axis_direction', 'axis_point']}: "
-                "请先 fit() 或直接给 self.param"
+                "请先 fit() 或直接给 self.params"
             )
         if isinstance(n, bool) or not isinstance(n, int):
             raise TypeError(f"n 必须为整数, 得到 {type(n).__name__}")
@@ -463,10 +463,10 @@ class AssemblyCn(AssemblyFiber):
 
     与 :class:`AssemblyFiber` (screw) 的差别 (其余全部继承):
 
-    1. **纯转动** —— ``param['rise']`` 恒为 0, 转角**钉死**为 ``omega = 360 / n``
+    1. **纯转动** —— ``params['rise']`` 恒为 0, 转角**钉死**为 ``omega = 360 / n``
        (n = part 数; ``_rotation_only``)。数据里量到的每步转角存在
-       ``extra_param['measured_omega']``, 它与 360/n 的差 = "Cn 假设成立程度",
-       由 ``rmsd`` 与 ``extra_param['implied_n']`` (= 360 / measured_omega) 反映;
+       ``params['measured_omega']``, 它与 360/n 的差 = "Cn 假设成立程度",
+       由 ``rmsd`` 与 ``params['implied_n']`` (= 360 / measured_omega) 反映;
     2. **成环** —— fit 的相邻对含末→首的闭合步 ``(part_{n-1} -> part_0)``
        (``_step_pairs``), 所以 ``step_omega`` / ``step_rmsd`` 覆盖"转一圈是否闭合";
        screw 的 fit 只看 n-1 步。

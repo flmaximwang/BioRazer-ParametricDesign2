@@ -142,8 +142,8 @@ def test_fit_recovers_synthetic_screw():
     fiber = _fiber_from_prototype(proto, 4, T)
     fiber.fit()
 
-    assert np.degrees(fiber.param["omega"]) == pytest.approx(SYNTH_OMEGA_DEG, abs=1e-4)
-    assert fiber.param["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
+    assert np.degrees(fiber.params["omega"]) == pytest.approx(SYNTH_OMEGA_DEG, abs=1e-4)
+    assert fiber.params["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
     np.testing.assert_allclose(fiber.xyz[2], [0, 0, 1], atol=1e-6)
     assert fiber.rmsd < 1e-4                      # 严格 screw, 模型精确
     # ref_structure = parts[0] 经 transformation 生成的理想 fiber (此处与观测重合)
@@ -151,12 +151,12 @@ def test_fit_recovers_synthetic_screw():
     np.testing.assert_allclose(
         fiber.ref_structure.coord, fiber.structure.coord, atol=1e-5
     )
-    np.testing.assert_allclose(fiber.extra_param["part_rmsd"], 0, atol=1e-5)
-    assert fiber.extra_param["axis_deviation"] < 1e-4
+    np.testing.assert_allclose(fiber.params["part_rmsd"], 0, atol=1e-5)
+    assert fiber.params["axis_deviation"] < 1e-4
     # transformation 本身也应是同一个 screw (绕轴旋转 + 沿轴平移)
     np.testing.assert_allclose(fiber.transformation, T, atol=1e-5)
     # 原点在轴上: 与构造时的 axis_point 只差一个沿 z 的分量 (同一条轴)
-    offset = fiber.param["axis_point"] - np.array(SYNTH_AXIS_POINT)
+    offset = fiber.params["axis_point"] - np.array(SYNTH_AXIS_POINT)
     np.testing.assert_allclose(offset[:2], 0, atol=1e-5)
 
 
@@ -214,7 +214,7 @@ def test_generate_parts_naming_and_geometry():
 
 
 def test_transformation_is_derived_from_param():
-    """screw 参数就是 ``param``: 直接给 param (不经过 fit) 也能 generate_parts。"""
+    """screw 参数就是 ``params``: 直接给 params (不经过 fit) 也能 generate_parts。"""
     proto = _atoms(PROTOTYPE_COORD)
     T = _screw(SYNTH_OMEGA_DEG, SYNTH_RISE, SYNTH_AXIS_POINT)
 
@@ -222,7 +222,7 @@ def test_transformation_is_derived_from_param():
     fiber.append_part("A", Assembly(structure=proto))
     assert fiber.transformation is None                     # 无参数 → 无变换
 
-    fiber.param = {
+    fiber.params = {
         "omega": np.deg2rad(SYNTH_OMEGA_DEG),
         "rise": SYNTH_RISE,
         "axis_direction": np.array([0.0, 0.0, 1.0]),
@@ -243,7 +243,7 @@ def test_validation_errors():
     proto = _atoms(PROTOTYPE_COORD)
     fiber = _fiber_from_prototype(proto, 3, _screw(SYNTH_OMEGA_DEG, SYNTH_RISE))
 
-    # 未 fit / 未给 param 里的 screw 参数
+    # 未 fit / 未给 params 里的 screw 参数
     with pytest.raises(ValueError, match="screw 参数"):
         fiber.generate_parts(3)
 
@@ -283,15 +283,15 @@ def test_fit_is_invariant_under_rigid_motion():
     fiber = _fiber_from_prototype(proto, 4, T)
     fiber.fit()
     z_before = fiber.xyz[2].copy()
-    omega_before = fiber.param["omega"]
+    omega_before = fiber.params["omega"]
 
     rigid = R.from_euler("xyz", [25.0, -30.0, 55.0], degrees=True)
     moved = fiber.copy()
     moved.structure.coord = rigid.apply(moved.structure.coord) + np.array([5.0, 6.0, -7.0])
     moved.fit()
 
-    assert moved.param["omega"] == pytest.approx(omega_before, abs=1e-5)
-    assert moved.param["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
+    assert moved.params["omega"] == pytest.approx(omega_before, abs=1e-5)
+    assert moved.params["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
     np.testing.assert_allclose(moved.xyz[2], rigid.apply(z_before), atol=1e-5)
     assert moved.rmsd < 1e-4
 
@@ -344,14 +344,14 @@ def test_vy1_fit_screw_and_frame(vy1):
 
     # 纤维轴 ≈ 晶体 c 轴; 每步 -48.92 deg / +18.33 A
     assert abs(float(np.dot(fiber.xyz[2], [0, 0, 1]))) > 0.999
-    assert np.degrees(fiber.param["omega"]) == pytest.approx(VY1_OMEGA_DEG, abs=0.3)
-    assert fiber.param["rise"] == pytest.approx(VY1_RISE, abs=0.3)
-    assert fiber.param["rise"] > 0                      # z 指向 part 序号递增一侧
-    assert fiber.extra_param["axis_deviation"] < 1.0    # 各步旋转轴确实共轴
+    assert np.degrees(fiber.params["omega"]) == pytest.approx(VY1_OMEGA_DEG, abs=0.3)
+    assert fiber.params["rise"] == pytest.approx(VY1_RISE, abs=0.3)
+    assert fiber.params["rise"] > 0                      # z 指向 part 序号递增一侧
+    assert fiber.params["axis_deviation"] < 1.0    # 各步旋转轴确实共轴
     # 每步的转角/升高彼此一致 (part 顺序正确)
-    step_omega = np.degrees(fiber.extra_param["step_omega"])
+    step_omega = np.degrees(fiber.params["step_omega"])
     assert np.ptp(step_omega) < 1.0
-    assert np.ptp(fiber.extra_param["step_rise"]) < 0.5
+    assert np.ptp(fiber.params["step_rise"]) < 0.5
     assert fiber.rmsd < 1.2
 
     # x = 由轴指向 parts[0] (G+g) 质心, 且与 z 垂直
@@ -400,7 +400,7 @@ def test_ref_structure_is_the_generated_ideal_fiber(vy1):
     )
     assert fiber.rmsd == pytest.approx(0.9996, abs=0.05)   # 6vy1 实测值
     # 逐 part rmsd: 第一个 part 就是原型 (G+g) → 0; 其余各 ~1 A
-    part_rmsd = fiber.extra_param["part_rmsd"]
+    part_rmsd = fiber.params["part_rmsd"]
     assert len(part_rmsd) == len(order)
     assert part_rmsd[0] == 0
     offset = 0
@@ -430,8 +430,8 @@ def test_vy1_mask_path_matches_leaf_path(vy1):
     mask_fiber = AssemblyFiber.from_atomarray(structure=struct, mask=masks)
     mask_fiber.fit()
 
-    assert mask_fiber.param["omega"] == pytest.approx(leaf.param["omega"], abs=1e-9)
-    assert mask_fiber.param["rise"] == pytest.approx(leaf.param["rise"], abs=1e-9)
+    assert mask_fiber.params["omega"] == pytest.approx(leaf.params["omega"], abs=1e-9)
+    assert mask_fiber.params["rise"] == pytest.approx(leaf.params["rise"], abs=1e-9)
     assert mask_fiber.rmsd == pytest.approx(leaf.rmsd, abs=1e-9)
 
 
@@ -449,7 +449,7 @@ def test_from_param_builds_fiber_without_observation():
     )
 
     assert list(fiber.parts) == [f"A:{k}" for k in range(4)]
-    assert fiber.param["part_num"] == 4 and fiber.param["atom_num"] == len(proto)
+    assert fiber.params["part_num"] == 4 and fiber.params["atom_num"] == len(proto)
     np.testing.assert_allclose(fiber.transformation, T, atol=1e-12)
     for k in range(4):
         expected = AssemblyFiber.apply_transformation(proto, T, k)
@@ -463,8 +463,8 @@ def test_from_param_builds_fiber_without_observation():
     )
     # 生成的纤维再 fit → 回到原来的参数
     fiber.fit()
-    assert np.degrees(fiber.param["omega"]) == pytest.approx(SYNTH_OMEGA_DEG, abs=1e-4)
-    assert fiber.param["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
+    assert np.degrees(fiber.params["omega"]) == pytest.approx(SYNTH_OMEGA_DEG, abs=1e-4)
+    assert fiber.params["rise"] == pytest.approx(SYNTH_RISE, abs=1e-5)
     assert fiber.rmsd < 1e-4
 
 
@@ -521,18 +521,18 @@ def test_cn_fit_recovers_rotation_only_ring():
     cn = _fiber_from_prototype(proto, 3, T, cls=AssemblyCn)
     cn.fit()
 
-    assert cn.param["rise"] == 0.0                       # 纯转动, 不是 "≈0"
-    assert cn.param["omega"] == 2 * np.pi / 3            # 转角由重数钉死 (精确)
-    assert np.degrees(cn.extra_param["measured_omega"]) == pytest.approx(120.0, abs=1e-3)
-    assert np.degrees(cn.extra_param["measured_omega"]) > 0   # 正向 = part 序号递增一侧
-    assert cn.extra_param["implied_n"] == pytest.approx(3.0, abs=1e-3)
+    assert cn.params["rise"] == 0.0                       # 纯转动, 不是 "≈0"
+    assert cn.params["omega"] == 2 * np.pi / 3            # 转角由重数钉死 (精确)
+    assert np.degrees(cn.params["measured_omega"]) == pytest.approx(120.0, abs=1e-3)
+    assert np.degrees(cn.params["measured_omega"]) > 0   # 正向 = part 序号递增一侧
+    assert cn.params["implied_n"] == pytest.approx(3.0, abs=1e-3)
     assert cn.rmsd < 1e-4
     # 环状步: 3 个 (纤维只有 n-1 = 2 个), 且三步转角一致
-    assert len(cn.extra_param["step_rmsd"]) == 3
-    assert np.ptp(np.degrees(cn.extra_param["step_omega"])) < 1e-4   # biotite 内部 float32
+    assert len(cn.params["step_rmsd"]) == 3
+    assert np.ptp(np.degrees(cn.params["step_omega"])) < 1e-4   # biotite 内部 float32
     # transformation = 构造的纯旋转 (z 反向 + omega 反向 = 同一个刚体运动)
     np.testing.assert_allclose(cn.transformation, T, atol=1e-6)
-    axis_point = cn.param["axis_point"]
+    axis_point = cn.params["axis_point"]
     np.testing.assert_allclose(
         cn.transformation[:3, :3] @ axis_point + cn.transformation[:3, 3],
         axis_point, atol=1e-6,                             # 轴上点不动 → 无平移
@@ -554,11 +554,11 @@ def test_cn_ring_average_dilutes_a_pure_screw():
     T = _screw(SYNTH_OMEGA_DEG, SYNTH_RISE)               # rise = 5 A ≠ 0
     cn = _fiber_from_prototype(proto, 4, T, cls=AssemblyCn)
     cn.fit()
-    assert cn.param["rise"] == 0.0                        # 仍然只给纯转动
-    assert cn.param["omega"] == 2 * np.pi / 4             # 钉死 = 360/4
+    assert cn.params["rise"] == 0.0                        # 仍然只给纯转动
+    assert cn.params["omega"] == 2 * np.pi / 4             # 钉死 = 360/4
     # 数据里量到的是被稀释的 90 deg (含 (3 -> 0) 那一步的 +60 deg)
-    assert np.degrees(cn.extra_param["measured_omega"]) == pytest.approx(90.0, abs=1e-3)
-    assert cn.extra_param["implied_n"] == pytest.approx(4.0, abs=1e-3)
+    assert np.degrees(cn.params["measured_omega"]) == pytest.approx(90.0, abs=1e-3)
+    assert cn.params["implied_n"] == pytest.approx(4.0, abs=1e-3)
     assert cn.rmsd > 1.0
     # 同一份数据用 AssemblyFiber (screw) 是精确的
     fiber = _fiber_from_prototype(proto, 4, T)
@@ -571,16 +571,16 @@ def test_cn_from_param_makes_closed_ring():
     proto = _atoms(PROTOTYPE_COORD)
     cn = AssemblyCn.from_param(proto, n=4)
     assert list(cn.parts) == [f"A:{k}" for k in range(4)]
-    assert cn.param["omega"] == pytest.approx(2 * np.pi / 4)
-    assert cn.param["rise"] == 0.0
+    assert cn.params["omega"] == pytest.approx(2 * np.pi / 4)
+    assert cn.params["rise"] == 0.0
     np.testing.assert_allclose(
         AssemblyFiber.apply_transformation(proto, cn.transformation, 4).coord,
         proto.coord, atol=1e-9,
     )
     cn.fit()
-    assert cn.param["omega"] == 2 * np.pi / 4             # 钉死, 与构造值一致
-    assert np.degrees(cn.extra_param["measured_omega"]) == pytest.approx(90.0, abs=1e-6)
-    assert cn.extra_param["implied_n"] == pytest.approx(4.0, abs=1e-6)
+    assert cn.params["omega"] == 2 * np.pi / 4             # 钉死, 与构造值一致
+    assert np.degrees(cn.params["measured_omega"]) == pytest.approx(90.0, abs=1e-6)
+    assert cn.params["implied_n"] == pytest.approx(4.0, abs=1e-6)
     assert cn.rmsd < 1e-6
 
 
@@ -599,19 +599,19 @@ def test_vy1_G_plus_g_is_a_C2(vy1):
     cn.fit()
 
     # G → g: 2 重轴, 转角钉死 180 deg; 数据里量到 179.72 deg
-    assert cn.param["omega"] == np.pi
-    assert np.degrees(cn.extra_param["measured_omega"]) == pytest.approx(179.722, abs=0.05)
-    assert cn.param["rise"] == 0.0
-    assert cn.extra_param["implied_n"] == pytest.approx(2.0031, abs=0.002)
+    assert cn.params["omega"] == np.pi
+    assert np.degrees(cn.params["measured_omega"]) == pytest.approx(179.722, abs=0.05)
+    assert cn.params["rise"] == 0.0
+    assert cn.params["implied_n"] == pytest.approx(2.0031, abs=0.002)
     # 叠合残差 1.268 A (G 与 g 的构象差异); rmsd 是含 part_0 (残差恒为 0) 的合并值
-    assert cn.extra_param["step_rmsd"].max() == pytest.approx(1.268, abs=0.02)
-    assert cn.rmsd == pytest.approx(cn.extra_param["part_rmsd"][1] / np.sqrt(2), abs=1e-9)
+    assert cn.params["step_rmsd"].max() == pytest.approx(1.268, abs=0.02)
+    assert cn.rmsd == pytest.approx(cn.params["part_rmsd"][1] / np.sqrt(2), abs=1e-9)
     # 2 重轴 ⟂ 纤维轴, 且两轴近乎相交 (两条直线的距离 < 1 A)。注意不能直接比两个
     # "轴上一点" —— pinv 给的是各自最近世界原点的点, 同一条轴上也会差很远。
-    assert abs(float(np.dot(cn.param["axis_direction"], fiber.xyz[2]))) < 0.02
-    cross = np.cross(fiber.xyz[2], cn.param["axis_direction"])
+    assert abs(float(np.dot(cn.params["axis_direction"], fiber.xyz[2]))) < 0.02
+    cross = np.cross(fiber.xyz[2], cn.params["axis_direction"])
     gap = abs(float(np.dot(
-        cn.param["axis_point"] - fiber.param["axis_point"], cross
+        cn.params["axis_point"] - fiber.params["axis_point"], cross
     ))) / np.linalg.norm(cross)
     assert gap < 1.0                                      # 实测 0.34 A
     # 链对 A/a 是同一几何、构象差异更小的一对
@@ -619,7 +619,7 @@ def test_vy1_G_plus_g_is_a_C2(vy1):
     for letter in ("A", "a"):
         cn_a.append_part(letter, Assembly(structure=pairs["A"][pairs["A"].chain_id == letter]))
     cn_a.fit()
-    assert cn_a.param["omega"] == np.pi
-    assert np.degrees(cn_a.extra_param["measured_omega"]) == pytest.approx(179.925, abs=0.05)
-    assert cn_a.extra_param["step_rmsd"].max() == pytest.approx(0.625, abs=0.02)
+    assert cn_a.params["omega"] == np.pi
+    assert np.degrees(cn_a.params["measured_omega"]) == pytest.approx(179.925, abs=0.05)
+    assert cn_a.params["step_rmsd"].max() == pytest.approx(0.625, abs=0.02)
     assert cn_a.rmsd < cn.rmsd
