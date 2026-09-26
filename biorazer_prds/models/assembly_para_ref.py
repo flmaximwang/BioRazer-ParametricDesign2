@@ -1,9 +1,16 @@
 """参数化参考 Assembly: AssemblyParaRef。
 
 ref_structure 是 *虚拟* 的: 由拟合参数生成的理想轨迹, 作为放置/注册的参考几何。
-携带参数拟合机制 (``param`` / ``initial_param`` / ``extra_param`` /
-``params_not_to_fit`` / ``rmsd``) 与 ``fit`` / ``from_params``。
+携带参数拟合机制 (``params`` / ``fixed_params`` / ``rmsd``) 与 ``fit`` / ``from_param``。
 拟合得到的虚拟结构直接存入 ``ref_structure``。
+
+``params`` 是唯一的参数字典: 给定的键值即拟合初值, 拟合结果原地写回; 派生量
+(局部坐标帧 ``x``/``y``/``z``、``helix_type``、``fit_stats``) 也存在这里。
+``fixed_params`` 列出 ``params`` 中拟合期间保持不动的键名。
+
+注意: ``params`` 里混有派生量, 而 generate_*/fit_* 都是显式签名 (没有
+``**kwargs``), 所以 splat 前必须按目标函数的签名过滤 (见
+``assembly_helix._fit_kwargs``)。
 """
 
 from abc import abstractmethod
@@ -18,29 +25,23 @@ class AssemblyParaRef(Assembly):
 
     Properties
     ----------
-    param : dict
-        拟合得到的参数。
-    initial_param : dict
-        拟合的初始参数 (键不应超出 ``param``)。
-    extra_param : dict
-        不参与拟合的额外参数。
-    params_not_to_fit : list[str]
-        拟合期间保持固定的参数名。
+    params : dict
+        唯一的参数字典: 拟合初值 + 拟合结果 + 派生量 (x/y/z、helix_type、fit_stats)。
+    fixed_params : list[str]
+        拟合期间保持固定的参数名 (须是 ``params`` 的键)。
     rmsd : float
         拟合模型的均方根偏差。
     """
 
-    param: dict = field(default_factory=dict)
-    initial_param: dict = field(default_factory=dict)
-    extra_param: dict = field(default_factory=dict)
-    params_not_to_fit: list[str] = field(default_factory=list)
+    params: dict = field(default_factory=dict)
+    fixed_params: list[str] = field(default_factory=list)
 
     rmsd: float = None
 
     @classmethod
     def from_param(cls, *, params: dict, **kwargs):
         """从给定参数加载结构; 其余属性根据参数自动生成。"""
-        raise NotImplementedError("from_params method is not implemented")
+        raise NotImplementedError("from_param method is not implemented")
 
     @abstractmethod
     def fit(self, verbose: bool = False):
@@ -49,6 +50,6 @@ class AssemblyParaRef(Assembly):
 
         这是"坐标 → 参数"的拟合 (参数化参考的 fit)。
 
-        ``initial_param`` 提供初始猜测; ``params_not_to_fit`` 指定固定参数;
-        ``verbose=True`` 打印拟合过程。
+        ``params`` 中已有的值提供初始猜测 (原地写回拟合结果);
+        ``fixed_params`` 指定固定参数; ``verbose=True`` 打印拟合过程。
         """

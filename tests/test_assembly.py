@@ -660,6 +660,105 @@ class TestCrickTrimOrExtend:
         with pytest.raises(ValueError, match="无法缩短"):
             h.trim_or_extend(-7, "N")
 
+    def test_extend_after_fit_ignores_derived_params(self):
+        """fit() 会往 params 里写派生量 (x/y/z 局部帧、helix_type、fit_stats)。
+        伸长时这些键必须按生成器签名过滤 —— 否则 splat 进
+        generate_helix_ca_by_crick 直接 TypeError。"""
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=7, backbone_type="Gly")
+        h.fit()
+        assert {"x", "y", "z", "helix_type", "fit_stats"} <= set(h.params)
+        h.trim_or_extend(2, "C", type="fit")
+        assert len(np.unique(h.structure.res_id)) == 9
+
+
+class TestParamsAndFixedParams:
+    """params (初值 + 结果 + 派生量) 与 fixed_params 的合并语义。"""
+
+    def test_leaf_fit_uses_params_as_seed(self):
+        """params 里的给定值即拟合初值: 把 omega 设偏后 fit 能走回数据。"""
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=14, backbone_type="CA")
+        h.params["omega"] = 1.60
+        h.fit()
+        assert h.params["omega"] == pytest.approx(4 * np.pi / 7, abs=1e-2)
+
+    def test_leaf_fit_honours_fixed_params(self):
+        """fixed_params 钉住的参数拟合期间不动 (旧版在叶节点上被静默忽略)。"""
+        from biorazer_prds.models.assembly_helix import CrickHelix
+
+        h = CrickHelix.from_param(residue_num=14, backbone_type="CA")
+        h.params["omega"] = 1.60
+        h.fixed_params = ["omega"]
+        h.fit()
+        assert h.params["omega"] == pytest.approx(1.60)
+
+    def test_bundle_from_param_stores_full_params(self):
+        """from_param 生成的参数留在 params 里 (旧版丢弃 generate 的返回值)。"""
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        bundle = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=7, backbone_type="CA"
+        )
+        required = {
+            "helix_num", "residue_num", "senses", "centroid", "y_prototype", "z",
+            "r0", "w0", "phi0", "dphi0s", "r1s", "w1s", "phi1s", "pitch_angles",
+            "z_offsets",
+        }
+        assert required <= set(bundle.params)
+        assert all(bundle.params[k] is not None for k in required)
+
+    def test_bundle_extend_from_copied_params_without_fit(self):
+        """params 完整即可伸长, 不必先 fit() (旧版 from_param 丢参数, 只能 fit)。"""
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        base = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=7, backbone_type="CA"
+        )
+        S = base.structure
+        n = len(S) // 2
+        m1 = np.zeros(len(S), bool); m1[:n] = True
+        m2 = np.zeros(len(S), bool); m2[n:] = True
+        bundle = CCCPHelixBundle.from_atomarray(
+            structure=S, mask={"h1": m1, "h2": m2}
+        )
+        bundle.params = dict(base.params)     # 生成参数 = 合法参数, 无需 fit()
+        bundle.trim_or_extend({0: (1, 0)})
+        assert len(np.unique(bundle.parts["h1"].structure.res_id)) == 8
+
+    def test_bundle_refit_after_move_ignores_stale_frame_terms(self):
+        """结构移动后二次 fit: params 里的 centroid/z (绝对坐标帧量) 不能当种子,
+        否则 L-BFGS-B 落进错误盆地 (实测 0.0012 Å -> FitError / 4.7 Å)。"""
+        from scipy.spatial.transform import Rotation as R
+        from biorazer_prds.models.assembly_helix import CCCPHelixBundle
+
+        base = CCCPHelixBundle.from_param(
+            helix_num=2, residue_num=12, backbone_type="CA"
+        )
+        S = base.structure.copy()
+        n = len(S) // 2
+        m1 = np.zeros(len(S), bool); m1[:n] = True
+        m2 = np.zeros(len(S), bool); m2[n:] = True
+        bundle = CCCPHelixBundle.from_atomarray(
+            structure=S, mask={"h1": m1, "h2": m2}
+        )
+        bundle.structure.coord = (
+            R.from_euler("xyz", [40, -25, 60], degrees=True).apply(
+                bundle.structure.coord
+            )
+            + np.array([30.0, -20.0, 10.0])
+        )
+        bundle.fit()
+        rmsd_first = float(bundle.rmsd)
+        bundle.structure.coord = R.from_euler("x", 90, degrees=True).apply(
+            bundle.structure.coord
+        )
+        bundle.fit()   # params 里带着上一轮的 centroid/z
+        assert rmsd_first < 0.05
+        assert float(bundle.rmsd) == pytest.approx(rmsd_first, abs=1e-2)
+
 
 class TestCCCPTrimOrExtend:
     """CCCPHelixBundle.trim_or_extend: 用束参数伸长/缩短单根螺旋, 重建束结构。"""
@@ -699,7 +798,7 @@ class TestCCCPTrimOrExtend:
         # 新增 N 端残基在质心 z 更负的一端 (沿 +z 前进, N 端在 -z)
         assert bundle.parts["h1"].structure.coord[:, 2].min() < z_min_old
         # 执行完后 param 被清空
-        assert bundle.param == {}
+        assert bundle.params == {}
 
     def test_extend_helix1_cterm(self):
         bundle = self._make_bundle()
@@ -714,7 +813,7 @@ class TestCCCPTrimOrExtend:
         )
         # C 端新残基在 +z 更远端; param 已清空
         assert bundle.parts["h2"].structure.coord[:, 2].max() > h0_before[:, 2].max()
-        assert bundle.param == {}
+        assert bundle.params == {}
 
     def test_extend_both_ends_single_regeneration_matches_ideal(self):
         """同一根螺旋 N、C 两端在一次调用中处理, 新残基逐原子贴合理想超螺旋。
@@ -722,10 +821,15 @@ class TestCCCPTrimOrExtend:
         若仍按旧的分次生成, 第二次生成的 residue_t 网格奇偶性会与既有螺旋错位,
         新残基会偏离理想轨迹 ~2 Å。干净 from_param 束 (拟合残差≈0) 应逐原子一致。
         """
+        from biorazer_prds.models.assembly_helix import (
+            _CCCP_PARAM_KEYS,
+            _fit_kwargs,
+        )
         from biorazer_prds.params.cccp.generate import generate_cc_ca_by_cccp
 
         bundle = self._make_bundle()   # 7-mer, 拟合残差≈0
-        pm = bundle.param
+        # params 里含派生量 (x/y/z 局部帧), generate 只吃拟合参数 → 先过滤
+        pm = _fit_kwargs(bundle.params, _CCCP_PARAM_KEYS)
         L0, nN, nC = 7, 1, 2
         R = L0 + 2 * max(nN, nC)
         coords, _, _ = generate_cc_ca_by_cccp(**{**pm, "residue_num": R})
@@ -738,7 +842,7 @@ class TestCCCPTrimOrExtend:
         ca = ca[ca.atom_name == "CA"]
         o = np.argsort(ca.res_id, kind="stable")
         np.testing.assert_allclose(ca.coord[o], expect, atol=1e-2)
-        assert bundle.param == {}
+        assert bundle.params == {}
         # h2 未参与, 保持 7 残基
         assert len(np.unique(bundle.parts["h2"].structure.res_id)) == L0
 
@@ -762,7 +866,7 @@ class TestCCCPTrimOrExtend:
         bundle.trim_or_extend({0: (1, 0), 1: (0, 2)})
         assert len(np.unique(bundle.parts["h1"].structure.res_id)) == n0 + 1
         assert len(np.unique(bundle.parts["h2"].structure.res_id)) == n1 + 2
-        assert bundle.param == {}
+        assert bundle.params == {}
 
     def test_validation_errors(self):
         bundle = self._make_bundle()
@@ -784,12 +888,12 @@ class TestCCCPTrimOrExtend:
 
     def test_extend_missing_params_raises(self):
         bundle = self._make_bundle()
-        bundle.param = {"residue_num": 7}  # 破坏参数完整性
+        bundle.params = {"residue_num": 7}  # 破坏参数完整性
         with pytest.raises(ValueError, match="缺少"):
             bundle.trim_or_extend({0: (2, 0)})
         # 纯缩短不需要参数 (不会触发 generate)
         bundle2 = self._make_bundle()
-        bundle2.param = {"residue_num": 7}
+        bundle2.params = {"residue_num": 7}
         n0 = len(np.unique(bundle2.parts["h1"].structure.res_id))
         bundle2.trim_or_extend({0: (-1, 0)})
         assert len(np.unique(bundle2.parts["h1"].structure.res_id)) == n0 - 1

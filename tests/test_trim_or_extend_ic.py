@@ -33,7 +33,7 @@ def _make_helix7():
     r = fit_helix_by_crick(ca7, residue_num=7)
     p = r[0] if isinstance(r, tuple) else r
     h = CrickHelix.from_atomarray(mer7)
-    h.param = {**p, "residue_num": 7}
+    h.params = {**p, "residue_num": 7}
     return h, mer7
 
 
@@ -81,7 +81,7 @@ class TestCrickTrimOrExtendIC:
         _assert_existing_chain_untouched(S, mer7)
         # 新残基 CA == Crick 外推目标 == 理想 alpha-helix 延续
         new_ca = S.coord[(S.atom_name == "CA") & (S.res_id > 7)]
-        np.testing.assert_allclose(new_ca, _crick_target(h.param, 3, "C"), atol=1e-3)
+        np.testing.assert_allclose(new_ca, _crick_target(h.params, 3, "C"), atol=1e-3)
         mer10 = InternalCoord_AtomArray(input_io=build_bb_chain_ic(
             10, resn="GLY", ss="alpha-helix", start_res=1, chain_id="A"
         )).convert()
@@ -96,7 +96,7 @@ class TestCrickTrimOrExtendIC:
         assert np.unique(S.res_id).tolist() == [-1, 0, 1, 2, 3, 4, 5, 6, 7]
         _assert_existing_chain_untouched(S, mer7)
         new_ca = S.coord[(S.atom_name == "CA") & (S.res_id < 1)]
-        np.testing.assert_allclose(new_ca, _crick_target(h.param, 2, "N"), atol=1e-3)
+        np.testing.assert_allclose(new_ca, _crick_target(h.params, 2, "N"), atol=1e-3)
         _assert_bonds_ideal(S, [-1, 0])
 
     def test_trim_nterm(self):
@@ -140,7 +140,7 @@ class TestCrickTrimOrExtendIC:
         _assert_existing_chain_untouched(S, mer7)
         new_ca = S.coord[(S.atom_name == "CA") & (S.res_id < 1)]
         np.testing.assert_allclose(
-            new_ca, _crick_target(h.param, 2, "N"), atol=1e-3
+            new_ca, _crick_target(h.params, 2, "N"), atol=1e-3
         )
 
     def test_type_invalid_raises(self):

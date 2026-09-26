@@ -1,4 +1,5 @@
 import copy
+import inspect
 from typing import Iterable, Self
 from dataclasses import dataclass, field
 
@@ -28,6 +29,28 @@ from ..params.util import (
 )
 
 
+# ``params`` 除拟合参数外还存派生量 (局部帧 x/y/z、helix_type、fit_stats), 而
+# generate_* / fit_* 都是显式签名 (没有 **kwargs)。splat 前按目标函数的签名过滤,
+# 名单随生成器签名自动更新, 不需要手工维护。
+_CRICK_PARAM_KEYS = frozenset(
+    inspect.signature(generate_helix_ca_by_crick).parameters
+)
+_CCCP_PARAM_KEYS = frozenset(
+    inspect.signature(generate_cc_ca_by_cccp).parameters
+) - {"ref_structure"}
+
+
+def _fit_kwargs(params: dict, keys: frozenset) -> dict:
+    """从 ``params`` 取出目标函数接受的键 (丢弃派生量, 免 splat 时 TypeError)。
+
+    ``None`` 值一并丢弃: 这些函数的默认值就是"自己猜" (r1s=2.26、
+    dphi0s=None ...), 而显式传 ``None`` 会在 ``len(None)`` 之类的分支炸掉。
+    """
+    return {
+        k: v for k, v in params.items() if k in keys and v is not None
+    }
+
+
 @dataclass
 class CrickHelix(AssemblyParaRef):
     """单条 Crick 螺旋的 Assembly (叶节点, 继承 AssemblyParaRef)。
@@ -51,7 +74,7 @@ class CrickHelix(AssemblyParaRef):
         if self._xyz is None:
             self.fit()
             self._xyz = np.vstack(
-                (self.extra_param["x"], self.extra_param["y"], self.extra_param["z"])
+                (self.params["x"], self.params["y"], self.params["z"])
             )
         return self._xyz
 
@@ -139,8 +162,8 @@ class CrickHelix(AssemblyParaRef):
                 )
             structure, fit_stats = fit_bb_to_ca(resn, xyz, ss=ss)
         helix.structure = structure
-        helix.param = param
-        helix.extra_param.setdefault("fit_stats", fit_stats)
+        helix.params = param
+        helix.params.setdefault("fit_stats", fit_stats)
         return helix
 
     def fit(self, verbose: bool = False):
@@ -160,18 +183,28 @@ class CrickHelix(AssemblyParaRef):
         ca_coord = ca_atoms.coord
 
         _log(f"Running Crick fitting on {ca_coord.shape[0]} CA atoms")
-        param, rmsd, fitted_coord = fit_helix_by_crick(ca_coord, verbose=verbose)
-        self.param = param
+        # ``params`` 里的给定值 (from_param 生成的参数 / 上次 fit 的结果) 即拟合
+        # 初值; residue_num 是结构量, 必须等于观测 CA 数, 不能沿用旧值。
+        seed = _fit_kwargs(self.params, _CRICK_PARAM_KEYS)
+        seed.pop("residue_num", None)
+        param, rmsd, fitted_coord = fit_helix_by_crick(
+            ca_coord,
+            residue_num=ca_coord.shape[0],
+            params_not_to_fit=self.fixed_params,
+            verbose=verbose,
+            **seed,
+        )
+        self.params.update(param)
 
         _log("Constructing local orthonormal frame")
-        z = self.param["direction"]
-        x_prototype = ca_atoms.coord[0] - self.param["centroid"]
+        z = self.params["direction"]
+        x_prototype = ca_atoms.coord[0] - self.params["centroid"]
         y = np.cross(z, x_prototype)
         y /= np.linalg.norm(y)
         x = np.cross(y, z)
-        self.extra_param["x"] = x
-        self.extra_param["y"] = y
-        self.extra_param["z"] = z
+        self.params["x"] = x
+        self.params["y"] = y
+        self.params["z"] = z
         self.rmsd = rmsd
 
         fitted_structure = bt_struct.AtomArray(length=ca_coord.shape[0])
@@ -182,7 +215,7 @@ class CrickHelix(AssemblyParaRef):
         fitted_structure.res_name = ca_atoms.res_name
         fitted_structure.coord = fitted_coord
         self.ref_structure = fitted_structure
-        self.extra_param["helix_type"] = self.calculate_helix_type(self.param["omega"])
+        self.params["helix_type"] = self.calculate_helix_type(self.params["omega"])
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
 
     def trim_or_extend(
@@ -243,8 +276,8 @@ class CrickHelix(AssemblyParaRef):
             )
         else:
             new_part.remove_atoms(self._trim_mask(-n, terminus))
-        new_part.param = {
-            **self.param,
+        new_part.params = {
+            **self.params,
             "residue_num": len(np.unique(new_part.structure.res_id)),
         }
         new_part.ref_structure = None
@@ -320,14 +353,17 @@ class CrickHelix(AssemblyParaRef):
                 "residue_num", "centroid", "direction", "radius",
                 "omega", "pitch_angle", "phi0",
             }
-            missing = required - set(self.param)
+            missing = required - set(self.params)
             if missing:
                 raise ValueError(
                     "trim_or_extend 伸长 (type='fit') 需要完整 Crick 参数, "
                     f"缺少 {sorted(missing)}; 请先调用 fit() 拟合参数"
                 )
             residue_num = len(np.unique(structure.res_id))
-            kwargs = {**self.param, "residue_num": residue_num + 2 * n}
+            kwargs = {
+                **_fit_kwargs(self.params, _CRICK_PARAM_KEYS),
+                "residue_num": residue_num + 2 * n,
+            }
             helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
             ref_ca = helix_ca[-(n + 1):] if terminus == "C" else helix_ca[:n + 1]
             # uniform=True: 只解一个均匀 psi/phi (用拟合 Crick 参数决定的新
@@ -368,14 +404,17 @@ class CrickHelix(AssemblyParaRef):
             "pitch_angle",
             "phi0",
         }
-        missing = required - set(self.param)
+        missing = required - set(self.params)
         if missing:
             raise ValueError(
                 "trim_or_extend 伸长需要完整 Crick 参数, 缺少 "
                 f"{sorted(missing)}; 请先调用 fit() 拟合参数"
             )
         residue_num = len(np.unique(self.structure.res_id))
-        kwargs = {**self.param, "residue_num": residue_num + 2 * n}
+        kwargs = {
+            **_fit_kwargs(self.params, _CRICK_PARAM_KEYS),
+            "residue_num": residue_num + 2 * n,
+        }
         helix_ca, _ = generate_helix_ca_by_crick(**kwargs)
         new_ca = helix_ca[:n] if terminus == "N" else helix_ca[-n:]
         new_structure = ca_xyz_to_atom_array(
@@ -411,7 +450,7 @@ class CCCPHelixBundle(AssemblyParaRef):
         每条螺旋是一个叶子节点 (按顺序识别, 与 key 名无关)。
     """
 
-    param: dict = field(
+    params: dict = field(
         default_factory=lambda: {
             "helix_num": None,
             "residue_num": None,
@@ -449,11 +488,11 @@ class CCCPHelixBundle(AssemblyParaRef):
 
         sub-assembly 互不交集且恰好构成束, 因此按子节点顺序计数, 与 mask
         key 名无关。叶节点 (如 ``from_param`` 生成的束) 无子节点时回退到
-        ``param[\"helix_num\"]``。
+        ``params["helix_num"]``。
         """
         if self.parts:
             return len(self.parts)
-        return self.param.get("helix_num")
+        return self.params.get("helix_num")
 
     @classmethod
     def from_mask(cls, structure: bt_struct.AtomArray, mask: dict[str, np.ndarray]):
@@ -481,7 +520,6 @@ class CCCPHelixBundle(AssemblyParaRef):
     ):
         """按参数生成束结构 (CA/Gly 主链); 不构建子节点 (mask 未提供)。"""
         res_obj = cls()
-        res_obj.param["helix_num"] = helix_num
         xyz, param, _ = generate_cc_ca_by_cccp(
             helix_num=helix_num,
             residue_num=residue_num,
@@ -507,6 +545,9 @@ class CCCPHelixBundle(AssemblyParaRef):
         else:
             raise ValueError(f"Unsupported backbone_type: {backbone_type}")
         res_obj.structure = structure
+        # params 即该束的完整参数 (与 CrickHelix.from_param 对称): fit() 以此为
+        # 初值, trim_or_extend 也能直接用, 不必先 fit()。
+        res_obj.params.update(param)
         return res_obj
 
     def fit(self, verbose: bool = False):
@@ -532,15 +573,15 @@ class CCCPHelixBundle(AssemblyParaRef):
         assert (
             len(set(helix_lens)) == 1
         ), f"All helices must have the same length to fit a CCCP model. Current lengths: {helix_lens}"
-        self.initial_param["helix_num"] = len(helix_lens)
-        self.initial_param["residue_num"] = helix_lens[0]
+        self.params["helix_num"] = len(helix_lens)
+        self.params["residue_num"] = helix_lens[0]
 
         _log(
-            f"Collecting observed CA coordinates (helix_num={self.initial_param['helix_num']}, "
-            f"residue_num={self.initial_param['residue_num']})"
+            f"Collecting observed CA coordinates (helix_num={self.params['helix_num']}, "
+            f"residue_num={self.params['residue_num']})"
         )
         ca_coord_obs = np.zeros(
-            shape=(self.initial_param["helix_num"], helix_lens[0], 3)
+            shape=(self.params["helix_num"], helix_lens[0], 3)
         )
         # 每条螺旋的 CA 原子 (helix-major 顺序), 供生成 ref_structure 时复制
         # 链/残基属性, 使输出保留原始 chain_id / res_id 标注。
@@ -553,14 +594,23 @@ class CCCPHelixBundle(AssemblyParaRef):
         ref_ca = bt_struct.concatenate(helix_ca_list)
 
         _log("Running staged CCCP bundle optimization")
+        # 种子: params 里的给定值即初值 (fixed_params 钉住的键必须传, 否则钉不住)。
+        # centroid / z 是绝对坐标帧量, 而 Stage 0/1 本来就从观测坐标重新估它们;
+        # 结构被移动过之后拿历史值当种子会把 L-BFGS-B 带进错误盆地 (实测束绕 x
+        # 转 90° 后: 无种子 RMSD 0.0012 A, 种 centroid+z 则 FitError / 4.7 A)。
+        # 除非显式钉住, 这两个不种。
+        seed = _fit_kwargs(self.params, _CCCP_PARAM_KEYS)
+        for key in ("centroid", "z"):
+            if key not in self.fixed_params:
+                seed.pop(key, None)
         param, rmsd, _, structure_list = fit_cc_by_cccp(
             ca_coord_obs,
-            params_not_to_fit=self.params_not_to_fit,
+            params_not_to_fit=self.fixed_params,
             verbose=verbose,
-            **self.initial_param,
+            **seed,
         )
 
-        self.param = param
+        self.params.update(param)
         z = param["z"]
         y_prototype = param["y_prototype"]
 
@@ -568,9 +618,9 @@ class CCCPHelixBundle(AssemblyParaRef):
         x = np.cross(y_prototype, z)
         x /= np.linalg.norm(x)
         y = np.cross(z, x)
-        self.extra_param["x"] = x
-        self.extra_param["y"] = y
-        self.extra_param["z"] = z
+        self.params["x"] = x
+        self.params["y"] = y
+        self.params["z"] = z
 
         self.rmsd = rmsd
         # 用拟合参数重新生成 CA, 并从观测 CA (ref_ca) 复制链/残基属性,
@@ -579,9 +629,9 @@ class CCCPHelixBundle(AssemblyParaRef):
         self.ref_structure = atom_array
 
         self._xyz = np.vstack(
-            (self.extra_param["x"], self.extra_param["y"], self.extra_param["z"])
+            (self.params["x"], self.params["y"], self.params["z"])
         )
-        self._centroid = self.param["centroid"]
+        self._centroid = self.params["centroid"]
         _log(f"Completed fit, RMSD={self.rmsd:.4f}")
         return structure_list
 
@@ -595,10 +645,10 @@ class CCCPHelixBundle(AssemblyParaRef):
             residue_t 网格奇偶相性错位 (偶数长度网格为半整数、奇数长度为整数,
             分次切换会错相位)。
 
-        伸长部分的几何由束参数 ``self.param`` 生成的理想超螺旋轨迹提供, 按该螺旋
+        伸长部分的几何由束参数 ``self.params`` 生成的理想超螺旋轨迹提供, 按该螺旋
         当前末端的 residue_t 等相位续接; 缩短则直接删去末端残基。
 
-        全部执行完后 ``self.param`` 被清空, 束不再携带已拟合参数 (避免后续误用与
+        全部执行完后 ``self.params`` 被清空, 束不再携带已拟合参数 (避免后续误用与
         结构不一致的旧参数); 故同一次调用内所有想延长/缩短的螺旋都要写进 ``spec``。
         """
         if not self.parts:
@@ -666,11 +716,11 @@ class CCCPHelixBundle(AssemblyParaRef):
 
             order = np.argsort(new_part.structure.res_id, kind="stable")
             new_part.structure = new_part.structure[order]
-            new_part.param = {}
+            new_part.params = {}
             new_part.ref_structure = None
             helix_part.replace_with(new_part)
 
-        self.param = {}
+        self.params = {}
         return self
 
     def _extend_end_fragments(
@@ -700,7 +750,7 @@ class CCCPHelixBundle(AssemblyParaRef):
             "z_offsets",
         }
         missing = {
-            k for k in required if k not in self.param or self.param.get(k) is None
+            k for k in required if k not in self.params or self.params.get(k) is None
         }
         if missing:
             raise ValueError(
@@ -719,7 +769,9 @@ class CCCPHelixBundle(AssemblyParaRef):
 
         # 生成的网格 R 需覆盖两端 target residue_t, 且与 L0 同奇偶
         R = L0 + 2 * max(nN_ext, nC_ext, nN_trim, nC_trim)
-        coords, _, _ = generate_cc_ca_by_cccp(**{**self.param, "residue_num": R})
+        coords, _, _ = generate_cc_ca_by_cccp(
+            **{**_fit_kwargs(self.params, _CCCP_PARAM_KEYS), "residue_num": R}
+        )
         rt_gen = np.arange(0.5 - R / 2, 0.5 + R / 2)
         hc = coords[helix_index]
         chain_id0 = helix_part.structure.chain_id[0]
