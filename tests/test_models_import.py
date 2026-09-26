@@ -12,6 +12,8 @@ from biorazer_prds.models import (
     AssemblyRealRef,
     CrickHelix,
     CCCPHelixBundle,
+    AssemblyFiber,
+    AssemblyCn,
 )
 
 
@@ -29,13 +31,16 @@ def test_public_exports_exist():
         AssemblyRealRef,
         CrickHelix,
         CCCPHelixBundle,
+        AssemblyFiber,
+        AssemblyCn,
     ):
         assert cls is not None
 
 
 def test_hierarchy():
-    """ref 变体直接继承 Assembly; 螺旋类挂在 AssemblyParaRef 之下。"""
+    """ref 变体直接继承 Assembly; 螺旋/纤维类挂在 AssemblyParaRef 之下。"""
     assert issubclass(AssemblyParaRef, Assembly)
     assert issubclass(AssemblyRealRef, Assembly)
     assert issubclass(CrickHelix, AssemblyParaRef)
     assert issubclass(CCCPHelixBundle, AssemblyParaRef)
+    assert issubclass(AssemblyFiber, AssemblyParaRef)
