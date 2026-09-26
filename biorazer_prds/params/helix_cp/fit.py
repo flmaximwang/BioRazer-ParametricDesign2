@@ -97,6 +97,7 @@ def fit_helix_by_crick(
     omega=4 * np.pi / 7,
     pitch_angle=0.358,
     phi0=0.0,
+    params_not_to_fit: list[str] = [],
     verbose: bool = False,
 ):
     """
@@ -106,6 +107,8 @@ def fit_helix_by_crick(
     -----------------
     - observed_ca: np.ndarray - The coordinates of the CA atoms to fit.
     - initial_params: dict - Initial parameters for the helix fitting.
+    - params_not_to_fit: list[str], default [] - Parameter names held fixed
+      during all optimization stages (pinned to their initial values).
 
 
     Returns
@@ -137,47 +140,42 @@ def fit_helix_by_crick(
     initial_params["pitch_angle"] = pitch_angle
     initial_params["phi0"] = phi0
 
-    _log("Stage 0/2: optimize direction")
-    stage_params, result = _optimize_helix_by_crick(
-        ca_coords_obs=ca_coords_obs,
-        initial_params=initial_params,
-        param_names_to_optimize=["direction"],
-    )
-    _log("Stage 1/2: optimize centroid")
-    stage_params, result = _optimize_helix_by_crick(
-        ca_coords_obs=ca_coords_obs,
-        initial_params=stage_params,
-        param_names_to_optimize=["centroid"],
-    )
-
+    # 每个 stage 要优化的参数名; 固定参数 (params_not_to_fit) 逐 stage 剔除,
+    # 某个 stage 全被固定时跳过 (least_squares 不接受空参数向量)。
+    stages = [
+        ("Stage 0/2: optimize direction", ["direction"]),
+        ("Stage 1/2: optimize centroid", ["centroid"]),
+    ]
     for i in range(10):
-        _log(f"Refinement iteration {i + 1}/10: local geometric terms")
+        stages.append((
+            f"Refinement iteration {i + 1}/10: local geometric terms",
+            ["radius", "omega", "pitch_angle", "phi0"],
+        ))
+        stages.append((
+            f"Refinement iteration {i + 1}/10: joint parameter update",
+            ["centroid", "direction", "radius", "omega", "pitch_angle", "phi0"],
+        ))
+
+    stage_params = initial_params   # 所有 stage 都被跳过时保持初值不动
+    result = None
+    for label, names in stages:
+        names = [name for name in names if name not in params_not_to_fit]
+        if not names:
+            _log(f"{label}: skipped (all fixed)")
+            continue
+        _log(label)
         stage_params, result = _optimize_helix_by_crick(
             ca_coords_obs=ca_coords_obs,
             initial_params=stage_params,
-            param_names_to_optimize=[
-                "radius",
-                "omega",
-                "pitch_angle",
-                "phi0",
-            ],
+            param_names_to_optimize=names,
         )
 
-        _log(f"Refinement iteration {i + 1}/10: joint parameter update")
-        stage_params, result = _optimize_helix_by_crick(
-            ca_coords_obs=ca_coords_obs,
-            initial_params=stage_params,
-            param_names_to_optimize=[
-                "centroid",
-                "direction",
-                "radius",
-                "omega",
-                "pitch_angle",
-                "phi0",
-            ],
-        )
-
-    rmsd = np.sqrt(np.sum(result.fun**2) / residue_num)
+    if result is None:
+        # 所有参数都被固定: 没有优化可跑, 直接对当前参数求 RMSD。
+        pred_ca, _ = generate_helix_ca_by_crick(**stage_params)
+        rmsd = np.sqrt(np.sum((pred_ca - ca_coords_obs) ** 2) / residue_num)
+    else:
+        rmsd = np.sqrt(np.sum(result.fun**2) / residue_num)
     xyz, params = generate_helix_ca_by_crick(**stage_params)
     _log(f"Fit completed with RMSD={rmsd:.4f}")
     return params, rmsd, xyz
